@@ -1,1 +1,1 @@
-# torch-watcher
+# torchwatcher
