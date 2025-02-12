@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 
-def x_if_ix_is_none(x, xp):
+def x_if_xp_is_none(x, xp):
     return x if xp is None else xp
 
 
@@ -23,7 +23,7 @@ class ForwardInterjection(AbstractInterjection):
         pass
 
     def forward(self, *args, **kwargs):
-        return x_if_ix_is_none(args, self.process(*args, **kwargs))
+        return x_if_xp_is_none(args, self.process(*args, **kwargs))
 
 
 class WrappedForwardInterjection(AbstractInterjection):
@@ -46,7 +46,7 @@ class WrappedForwardInterjection(AbstractInterjection):
     def forward(self, *args, **kwargs):
         y = self.wrapped(*args, **kwargs)
 
-        return x_if_ix_is_none(y, self.process(*args, **kwargs))
+        return x_if_xp_is_none(y, self.process(*args, **kwargs))
 
 
 class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
