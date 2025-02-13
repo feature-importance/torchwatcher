@@ -8,6 +8,10 @@ def x_if_xp_is_none(x, xp):
     return x if xp is None else xp
 
 
+def unpack(result):
+    return result[0] if isinstance(result, tuple) and len(result) == 1 else result
+
+
 class AbstractInterjection(nn.Module, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def process(self, *args, **kwargs):
@@ -23,7 +27,7 @@ class ForwardInterjection(AbstractInterjection):
         pass
 
     def forward(self, *args, **kwargs):
-        return x_if_xp_is_none(args, self.process(*args, **kwargs))
+        return unpack(x_if_xp_is_none(args, self.process(*args, **kwargs)))
 
 
 class WrappedForwardInterjection(AbstractInterjection):
@@ -46,7 +50,7 @@ class WrappedForwardInterjection(AbstractInterjection):
     def forward(self, *args, **kwargs):
         y = self.wrapped(*args, **kwargs)
 
-        return x_if_xp_is_none(y, self.process(*args, **kwargs))
+        return unpack(x_if_xp_is_none(y, self.process(*args, **kwargs)))
 
 
 class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
