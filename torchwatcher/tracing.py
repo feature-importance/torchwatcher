@@ -1,12 +1,16 @@
 import copy
+from typing import Type, Sequence
 
 import torch
 from torch import nn
-from torch.fx import symbolic_trace
+from torch.fx import symbolic_trace, Node
 from torchvision.models import resnet18
 
+import node_selector
 from torchwatcher.interjection import ForwardInterjection, WrappedForwardInterjection, \
-    WrappedForwardBackwardInterjection
+    WrappedForwardBackwardInterjection, Interjection
+from torchwatcher.node_selector import NodeSelector
+from torchwatcher.utils import pack
 
 
 def get_fresh_qualname(traced: torch.fx.GraphModule, prefix: str) -> str:
@@ -72,6 +76,19 @@ def add_interjection(traced, interjection):
     return interjection_name
 
 
+def handle_inplace(traced: torch.fx.GraphModule, node: Node):
+    # handle modules with 'inplace' flags
+    if node.op == 'call_module' and hasattr(traced.get_submodule(node.target), 'inplace'):
+        traced.get_submodule(node.target).inplace = False
+        return node
+
+    # TODO: call_function with a kwarg called 'inplace'
+
+    # TODO: call_function with a name ending in underscore
+
+    return node
+
+
 def insert_interjection(traced, node, interjection):
     """
     Insert an interjection into the traced module at a given node. If the interjection is of the wrapped type, then the
@@ -79,6 +96,8 @@ def insert_interjection(traced, node, interjection):
     the node.
     """
     interjection_name = add_interjection(traced, interjection)
+
+    node = handle_inplace(traced, node)
 
     if hasattr(interjection, '_wrapped'):
         with traced.graph.inserting_after(node):
@@ -100,7 +119,7 @@ def insert_interjection(traced, node, interjection):
             new_node.replace_input_with(new_node, node)
 
 
-def interject_by_module_class(network, target_module_class, interjection):
+def interject_by_module_class(network: nn.Module, target_module_class: Type[nn.Module], interjection: Interjection):
     """Adds an interjection to all nodes that represent a particular nn.Module"""
     traced = symbolic_trace(network)
     modules = dict(traced.named_modules())
@@ -109,11 +128,42 @@ def interject_by_module_class(network, target_module_class, interjection):
         if node.target not in modules:
             continue
 
-        if type(modules[node.target]) == target_module_class:
+        if isinstance(modules[node.target], target_module_class):
             insert_interjection(traced, node, interjection)
 
     traced.recompile()
     return traced
+
+
+def interject_by_nodes(traced: torch.fx.GraphModule, nodes: [Node | Sequence[Node]], interjection: Interjection):
+    """Adds an interjection to all specified nodes"""
+    modules = dict(traced.named_modules())
+    nodes = pack(nodes)
+
+    for node in traced.graph.nodes:
+        if node in nodes:
+            insert_interjection(traced, node, interjection)
+
+    traced.recompile()
+    return traced
+
+
+def interject_by_match(network: nn.Module, selector: NodeSelector, interjection: Interjection):
+    """Adds an interjection to all nodes that represent a particular nn.Module"""
+    traced = symbolic_trace(network)
+    modules = dict(traced.named_modules())
+
+    for node in traced.graph.nodes:
+        if selector.fn((traced, node)):
+            insert_interjection(traced, node, interjection)
+
+    traced.recompile()
+    return traced
+
+
+def trim(network: torch.fx.GraphModule):
+    # TODO: implement. This should trim the tail of the graph so that it stops after the last interjection
+    pass
 
 
 class MyForwardInterjection(ForwardInterjection):
@@ -122,21 +172,21 @@ class MyForwardInterjection(ForwardInterjection):
         # return args[0]
 
 
-net = resnet18()
-net2 = interject_by_module_class(net, nn.Conv2d, MyForwardInterjection())
-r = net2(torch.zeros(1, 3, 224, 244))
-
-
-class MyWrappedForwardInterjection(WrappedForwardInterjection):
-    def process(self, name, input, output):
-        print(name, input.shape)
-
-
-net = resnet18()
-net2 = interject_by_module_class(net, nn.Conv2d, MyWrappedForwardInterjection())
-net2(torch.zeros(1, 3, 224, 244))
-
-
+# net = resnet18()
+# net2 = interject_by_module_class(net, nn.Conv2d, MyForwardInterjection())
+# r = net2(torch.zeros(1, 3, 224, 244))
+#
+#
+# class MyWrappedForwardInterjection(WrappedForwardInterjection):
+#     def process(self, name, input, output):
+#         print(name, input.shape)
+#
+#
+# net = resnet18()
+# net2 = interject_by_module_class(net, nn.Conv2d, MyWrappedForwardInterjection())
+# net2(torch.zeros(1, 3, 224, 244))
+#
+#
 class MyWrappedForwardBackwardInterjection(WrappedForwardBackwardInterjection):
     def process(self, name, input, output):
         print("forward", name, input.shape)
@@ -144,10 +194,15 @@ class MyWrappedForwardBackwardInterjection(WrappedForwardBackwardInterjection):
     def process_backward(self, name, grad_input, grad_output):
         print("backward", name, grad_input.shape if grad_input is not None else None)
 
+#
+# net = resnet18()
+# net2 = interject_by_module_class(net, nn.Conv2d, MyWrappedForwardBackwardInterjection())
+# r = net2(torch.zeros(1, 3, 224, 244))
+# loss = torch.nn.functional.cross_entropy(r, torch.tensor([0], dtype=torch.long))
+# loss.backward()
 
 net = resnet18()
-net2 = interject_by_module_class(net, nn.Conv2d, MyWrappedForwardBackwardInterjection())
+net2 = interject_by_match(net, node_selector.is_activation, MyWrappedForwardBackwardInterjection())
 r = net2(torch.zeros(1, 3, 224, 244))
 loss = torch.nn.functional.cross_entropy(r, torch.tensor([0], dtype=torch.long))
 loss.backward()
-

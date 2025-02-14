@@ -1,16 +1,12 @@
 import abc
+import collections.abc
 from typing import Callable
 
 import torch
 import torch.nn as nn
+from torch.utils.hooks import RemovableHandle
 
-
-def x_if_xp_is_none(x, xp):
-    return x if xp is None else xp
-
-
-def unpack(result):
-    return result[0] if isinstance(result, tuple) and len(result) == 1 else result
+from torchwatcher.utils import unpack, x_if_xp_is_none
 
 
 class Interjection(nn.Module, metaclass=abc.ABCMeta):
@@ -50,7 +46,7 @@ class WrappedForwardInterjection(Interjection):
 class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
     def __init__(self):
         super().__init__()
-        self._handles: dict[str, Callable] = {}
+        self._handles: dict[str, RemovableHandle] = {}
 
     @abc.abstractmethod
     def process_backward(self,
