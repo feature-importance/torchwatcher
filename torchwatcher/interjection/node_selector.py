@@ -1,31 +1,25 @@
-################################################################################
-# firewatcher/src/firewatcher/graph/node_selector.py
-#
-# Jay Bear
-# Vision, Learning, and Control,
-# University of Southampton
-# 2024
-#
-# Functions and classes for handling the selection of certain nodes in the
-# compute graph. This approach may seem unorthodox - but I'm a functional
-# programmer at heart and this was the best approach I could think of.
+"""Functions and classes for handling the selection of certain nodes in the
+torch.fx graph"""
 
 from __future__ import annotations
+
 from os import linesep
-from torch.nn import Module
-from torch.fx import GraphModule, Node
 from typing import Any, Callable, Dict, List, Optional, Self, Tuple, Type
 
-from node_types import *
+from torch.fx import GraphModule, Node
+from torch.nn import Module
 
-IDENTITY_TRUE = lambda _: True
-IDENTITY_FALSE = lambda _: False
+from .node_types import *
+from torchwatcher import utils
+
+IDENTITY_TRUE = utils.true
+IDENTITY_FALSE = utils.false
 
 NodeState = Tuple[GraphModule, Node]
 SelectorFunction = Callable[[NodeState], bool]
 
 
-class NodeSelector():
+class NodeSelector:
     """
   ``NodeSelector`` is the base class for all node selection operations. This
   allows for operator overloading, such as with:
@@ -57,8 +51,9 @@ class NodeSelector():
     """
         # Selector function.
         assert callable(selector_function) or selector_function is None, \
-            "selector_function must be callable or None, but has been given " + \
-            f"a value of type '{type(selector_function)}' instead."
+            ("selector_function must be callable or None, but has been given "
+             f"a value of type '{type(selector_function)}' instead.")
+
         self._selector_function = IDENTITY_TRUE if selector_function is None \
             else selector_function
 
@@ -98,8 +93,8 @@ class NodeSelector():
       NodeSelector:
         New selector containing logical and.
     """
-        temp = lambda x: self._selector_function(x) and other.fn(x)
-        return NodeSelector(temp)
+        return NodeSelector(lambda x:
+                            self._selector_function(x) and other.fn(x))
 
     def __or__(
             # Arguments:
@@ -119,8 +114,9 @@ class NodeSelector():
       NodeSelector:
         New selector containing logical or.
     """
-        temp = lambda x: self._selector_function(x) or other._selector_function(x)
-        return NodeSelector(temp)
+        return NodeSelector(lambda x:
+                            self._selector_function(x) or
+                            other._selector_function(x))
 
     def __xor__(
             # Arguments:
@@ -140,8 +136,8 @@ class NodeSelector():
       NodeSelector:
         New selector containing logical exclusive or.
     """
-        temp = lambda x: self._selector_function(x) ^ other._selector_function(x)
-        return NodeSelector(temp)
+        return NodeSelector(lambda x: (self._selector_function(x) ^
+                                       other._selector_function(x)))
 
     def __invert__(
             # Arguments:
@@ -159,8 +155,7 @@ class NodeSelector():
       NodeSelector:
         New selector performing logical inversion.
     """
-        temp = lambda x: not self._selector_function(x)
-        return NodeSelector(temp)
+        return NodeSelector(lambda x: not self._selector_function(x))
 
     def __bool__(
             # Arguments:
@@ -179,10 +174,10 @@ class NodeSelector():
         This function will raise an error instead of returning a value.
     """
         raise ValueError(
-            "Attempt to convert a NodeSelector into a Boolean value. This is " + \
-            "likely a result of of trying to use Python primitive logical " + \
-            f"operators (and, or, not, etc.).{linesep}" + \
-            "If this was desired, please use the respective bitwise symbols " + \
+            "Attempt to convert a NodeSelector into a Boolean value. This is "
+            "likely a result of of trying to use Python primitive logical " +
+            f"operators (and, or, not, etc.).{linesep}" +
+            "If this was desired, please use the respective bitwise symbols " +
             "(&, |, ~) instead."
         )
 
@@ -191,7 +186,7 @@ class NodeSelector():
             self: Self
     ) -> Self:
         """
-    Handle call on the object. By default this just returns the object, which
+    Handle call on the object. By default, this just returns the object. This
     allows for both variable-like and function-like usages (for example,
     ``is_conv`` and ``is_conv()`` would perform the same).
 
@@ -245,8 +240,8 @@ def _is_node_of_function(
   Args:
     nodestate (NodeState):
       The nodestate to check.
-    module (Type[Module]):
-      The module class.
+    function (Type[Callable]):
+      The function.
 
   Returns:
     bool:
@@ -282,8 +277,8 @@ def _is_node_of_struct(
   """
     return any(
         any(
-            _is_node_of_module(nodestate, f) or _is_node_of_function(nodestate, f) \
-            for f in v
+            _is_node_of_module(nodestate, f) or
+            _is_node_of_function(nodestate, f) for f in v
         ) for v in structure.values()
     )
 
@@ -417,8 +412,6 @@ def select_slice(
 
 # Node selector constructors:
 
-# TODO: implement a node selector that gets node by name
-
 def node_lambda(
         # Arguments:
         fn: Callable[[Node], bool]
@@ -435,8 +428,56 @@ def node_lambda(
     NodeSelector:
       A node selector which calls the function on the node only.
   """
-    temp = lambda x: fn(x[1])
-    return NodeSelector(temp)
+    return NodeSelector(lambda x: fn(x[1]))
+
+
+def matches_name(name: str) -> NodeSelector:
+    """
+    A node selector which is true when the node name matches the given name
+    :param name: the name to match
+    :return: A node selector which returns True if the name matches
+    """
+    return node_lambda(lambda n: n.name == name)
+
+
+def matches_qualified_name(name: str) -> NodeSelector:
+    """
+    A node selector which is true when the node's qualified name (if it has one)
+    matches the given name. Qualified names follow the format described in
+    torchvision's
+    feature extractor.
+
+    For more details on the node naming conventions see the
+    :ref:`relevant subheading <about-node-names>` in the
+    `documentation <https://pytorch.org/vision/stable/feature_extraction.html
+    >`_.
+
+    :param name: the name to match
+    :return: A node selector which returns True if the name matches
+    """
+    return node_lambda(
+        lambda n: hasattr(n, 'qualified_name') and n.qualified_name == name)
+
+
+def matches_module_class(clz: Type[Module]) -> NodeSelector:
+    """
+    A node selector which is true when the node's target module class matches
+    the given class. Any matching node will
+    have a 'call_module' op.
+    :param clz: the class to match
+    :return: A node selector which returns True if the class matches
+    """
+    return NodeSelector(lambda n: _is_node_of_module(n, clz))
+
+
+def matches_activation(activation_name: str) -> NodeSelector:
+    if activation_name in ACTIVATIONS:
+        act = {activation_name: ACTIVATIONS[activation_name]}
+        return NodeSelector(lambda x: _is_node_of_struct(x, act))
+
+    raise ValueError(activation_name, "Unknown activation name. Names must "
+                                      "match one of the keys of the "
+                                      "ACTIVATIONS dictionary.")
 
 
 # Constant node selectors:
@@ -485,6 +526,12 @@ Note: MultiheadAttention is not included in the list of activation functions.
 """
 # Aliases:
 is_act, is_activ = is_activation, is_activation
+
+# dynamically add attrs for is_x where x is each activation
+# TODO: document this - or remove it if we make the node types enums as it
+#  becomes unnecessary as we can just have an is() function
+for name in ACTIVATIONS.keys():
+    globals()[f"is_{name.lower()}"] = matches_activation(name)
 
 is_conv: NodeSelector = NodeSelector(
     lambda x: _is_node_of_struct(x, CONVOLUTIONS)
@@ -632,14 +679,13 @@ def _is_node_parametrized(
     bool:
       Whether the node in the nodestate is from a parametrized node.
   """
-    named_modules = dict(nodestate[0].named_modules())
+    named_modules: Dict[str, Module] = dict(nodestate[0].named_modules())
     if nodestate[1].op != "call_module":
         return False
     module = named_modules.get(nodestate[1].target)
-    try:
+    if hasattr(module, "parametrizations"):
         return len(module.parametrizations) >= 1
-    except:
-        return False
+    return False
 
 
 is_parametrized: NodeSelector = NodeSelector(

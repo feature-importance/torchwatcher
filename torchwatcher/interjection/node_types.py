@@ -1,15 +1,7 @@
-################################################################################
-# firewatcher/src/firewatcher/graph/node_types.py
-#
-# Jay Bear
-# Vision, Learning, and Control,
-# University of Southampton
-# 2024
-#
-# Contains collections of node types.
+"""Contains collections of node types."""
 
 import torch
-
+# FIXME: make these enums
 ACTIVATIONS = {
   "ELU": [
     getattr(torch.nn,            "ELU",  None),

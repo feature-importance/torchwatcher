@@ -1,6 +1,4 @@
 import abc
-import collections.abc
-from typing import Callable
 
 import torch
 import torch.nn as nn
@@ -10,15 +8,21 @@ from torchwatcher.utils import unpack, x_if_xp_is_none
 
 
 class Interjection(nn.Module, metaclass=abc.ABCMeta):
+    """
+    Base class for all interjection types.
+    """
     pass
 
 
 class ForwardInterjection(Interjection):
+    """
+    Forward interjection that can be inserted _after_ particular nodes.
+    """
     def __init__(self):
         super().__init__()
 
     @abc.abstractmethod
-    def process(self, name, input):
+    def process(self, name: str, inputs):
         pass
 
     def forward(self, name, *args):
@@ -34,13 +38,14 @@ class WrappedForwardInterjection(Interjection):
         self._wrapped[name] = module
 
     @abc.abstractmethod
-    def process(self, name, input, output):
+    def process(self, name, inputs, outputs):
         pass
 
     def forward(self, name, *args, **kwargs):
         y = self._wrapped[name](*args, **kwargs)
 
-        return unpack(x_if_xp_is_none(y, self.process(name, unpack(args), unpack(y))))
+        return unpack(
+            x_if_xp_is_none(y, self.process(name, unpack(args), unpack(y))))
 
 
 class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
@@ -48,12 +53,19 @@ class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
         super().__init__()
         self._handles: dict[str, RemovableHandle] = {}
 
+    def process(self, name, inputs, outputs):
+        # concrete implementation for convenience if subclasses only care
+        # about backward. Just override if you want to hook both forward
+        # and backward passes.
+        return
+
     @abc.abstractmethod
     def process_backward(self,
                          name,
                          grad_input: [tuple[torch.Tensor, ...] | torch.Tensor],
-                         grad_output: [tuple[torch.Tensor, ...] | torch.Tensor]) -> [tuple[torch.Tensor] |
-                                                                                     torch.Tensor | None]:
+                         grad_output: [
+                             tuple[torch.Tensor, ...] | torch.Tensor]) -> [
+        tuple[torch.Tensor] | torch.Tensor | None]:
         pass
 
     def wrap(self, name: str, module: torch.fx.GraphModule):
@@ -61,7 +73,9 @@ class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
 
         def hook(_: nn.Module,
                  grad_input: [tuple[torch.Tensor, ...] | torch.Tensor],
-                 grad_output: [tuple[torch.Tensor, ...] | torch.Tensor]) -> [tuple[torch.Tensor] | torch.Tensor | None]:
-            return self.process_backward(name, unpack(grad_input), unpack(grad_output))
-        self._handles[name] = module.register_full_backward_hook(hook)
+                 grad_output: [tuple[torch.Tensor, ...] | torch.Tensor]) -> [
+            tuple[torch.Tensor] | torch.Tensor | None]:
+            return self.process_backward(name, unpack(grad_input),
+                                         unpack(grad_output))
 
+        self._handles[name] = module.register_full_backward_hook(hook)
