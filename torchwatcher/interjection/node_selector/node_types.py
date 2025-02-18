@@ -1,13 +1,11 @@
 """Contains collections of node types."""
 from enum import Enum
-from functools import reduce
-from operator import or_
 from typing import List, Any
 
 import torch
 
-from .node_selector import (NodeSelector, _is_node_of_module,
-                            _is_node_of_function, NodeState)
+from .node_selector import NodeSelector, _is_node_of_module
+from .node_selector import _is_node_of_function, NodeState
 
 
 def _is_node_of(

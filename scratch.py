@@ -4,7 +4,8 @@ from torchvision.models.feature_extraction import get_graph_node_names
 
 from torchwatcher.analysis.dead_relus import DeadReLU
 from torchwatcher.interjection import interject_by_match, ForwardInterjection, \
-    WrappedForwardBackwardInterjection, node_types
+    WrappedForwardBackwardInterjection
+from torchwatcher.interjection.node_selector import node_types
 import torchwatcher.interjection.node_selector as node_selector
 
 
