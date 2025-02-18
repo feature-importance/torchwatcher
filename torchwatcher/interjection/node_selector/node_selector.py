@@ -9,8 +9,12 @@ from typing import Any, Callable, Dict, List, Optional, Self, Tuple, Type
 from torch.fx import GraphModule, Node
 from torch.nn import Module
 
-# from .node_types import *
 from torchwatcher import utils
+
+__all__ = ["NodeSelector", "is_module", "is_parametrized", "is_parametrised",
+           "matches_module_class", "matches_qualified_name", "matches_name",
+           "node_lambda", "select_all", "select_slice", "has_following",
+           "has_preceding"]
 
 IDENTITY_TRUE = utils.true
 IDENTITY_FALSE = utils.false
@@ -511,7 +515,3 @@ is_module: NodeSelector = NodeSelector(
 A node selector which is true for all nodes which call a module.
 """
 
-__all__ = [NodeSelector, is_module, is_parametrized, is_parametrised,
-           matches_module_class, matches_qualified_name, matches_name,
-           node_lambda, select_all, select_slice, has_following,
-           has_preceding]
