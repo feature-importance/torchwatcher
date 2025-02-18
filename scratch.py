@@ -4,7 +4,7 @@ from torchvision.models.feature_extraction import get_graph_node_names
 
 from torchwatcher.analysis.dead_relus import DeadReLU
 from torchwatcher.interjection import interject_by_match, ForwardInterjection, \
-    WrappedForwardBackwardInterjection
+    WrappedForwardBackwardInterjection, node_types
 import torchwatcher.interjection.node_selector as node_selector
 
 
@@ -59,9 +59,11 @@ r = net2(torch.zeros(1, 3, 224, 244))
 loss = torch.nn.functional.cross_entropy(r, torch.tensor([0], dtype=torch.long))
 loss.backward()
 
+print(node_types.Activations.ReLU.value)
+print(node_types.Activations.ALL)
 
 dr = DeadReLU()
 net = resnet18()
-net2 = interject_by_match(net, getattr(node_selector, 'is_relu'), dr)
+net2 = interject_by_match(net, node_types.Activations.ReLU, dr)
 net2(torch.rand(10, 3, 224, 244))
 dr.print_summary()

@@ -1,5 +1,6 @@
 import collections
-
+from operator import or_ as _or_
+from functools import reduce
 
 def x_if_xp_is_none(x, xp):
     """returns x if xp is None, otherwise returns xp"""
@@ -28,3 +29,4 @@ def true(*_):
 def false(*_):
     """Always returns False. Useful for (not) selecting nodes in a graph."""
     return False
+
