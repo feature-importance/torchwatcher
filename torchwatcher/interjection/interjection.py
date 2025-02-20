@@ -34,10 +34,27 @@ class ForwardInterjection(Interjection):
 
     @abc.abstractmethod
     def process(self, name: str, module: [None | nn.Module], inputs):
+        """
+        Process the output of the interjected node.
+
+        You must not change the input inplace, but you can optionally return
+        a modified version of the inputs to pass along in the graph.
+
+        Args:
+            name: the name of the interjected node.
+            module: the actual module that was interjected. This will be None
+            if the interjection was not inserted after a module, but rather
+            after a function call or similar.
+            inputs: the outputs of the interjected node.
+
+        Returns: None, or an object of the same type(s) and shape(s) as inputs.
+        """
         pass
 
     def forward(self, name, *args):
-        return unpack(x_if_xp_is_none(args, self.process(name, self._get_prev(name), unpack(args))))
+        return unpack(
+            x_if_xp_is_none(args, self
+                            .process(name, self._get_prev(name), unpack(args))))
 
 
 class WrappedForwardInterjection(Interjection):
@@ -56,8 +73,9 @@ class WrappedForwardInterjection(Interjection):
         y = self._wrapped[name](*args, **kwargs)
 
         return unpack(
-            x_if_xp_is_none(y, self.process(name, self._wrapped[name], unpack(args),
-                                            unpack(y))))
+            x_if_xp_is_none(y,
+                            self.process(name, self._wrapped[name],
+                                         unpack(args), unpack(y))))
 
 
 class WrappedForwardBackwardInterjection(WrappedForwardInterjection):

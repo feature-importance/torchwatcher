@@ -1,23 +1,24 @@
 import torch
 from torch import nn
 
+from torchwatcher.analysis import analysis
+from torchwatcher.analysis.analysis import Analyzer
 from torchwatcher.interjection import ForwardInterjection
 
 
-class DeadReLU(ForwardInterjection):
-    def __init__(self):
-        super().__init__()
-        self.masks = {}
+class DeadReLU(Analyzer):
+    def process_batch_state(self, name, state, working_results):
+        x = state[analysis.OUTPUTS]
 
-    def process(self, name: str, module: [None | nn.Module], x: torch.Tensor):
-        if name not in self.masks:
-            self.masks[name] = torch.zeros(x.shape[1:])
+        if working_results is None:
+            working_results = torch.zeros(x.shape[1:])
 
         with torch.no_grad():
-            self.masks[name] += (x.detach().sum(dim=0) > 0).float()
+            working_results += (x.detach().sum(dim=0) > 0).float()
 
-    def print_summary(self):
-        for name, mask in self.masks.items():
-            print(name, mask.numel() - mask.sum())
+        return working_results
 
-
+    def result_to_dict(self, result) -> dict:
+        return {'dead_count': result.numel() - result.sum(),
+                'numel': result.numel(),
+                'sum': result.sum()}

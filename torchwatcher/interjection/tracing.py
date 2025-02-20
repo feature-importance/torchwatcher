@@ -150,11 +150,11 @@ def add_interjection(graph_module: fx.GraphModule,
     return interjection_name
 
 
-def handle_inplace(traced: fx.GraphModule, node: fx.Node) -> fx.Node:
+def handle_inplace(graph_module: fx.GraphModule, node: fx.Node) -> fx.Node:
     # handle modules with 'inplace' flags
-    if node.op == 'call_module' and hasattr(traced.get_submodule(node.target),
-                                            'inplace'):
-        traced.get_submodule(node.target).inplace = False
+    if (node.op == 'call_module' and
+            hasattr(graph_module.get_submodule(node.target), 'inplace')):
+        graph_module.get_submodule(node.target).inplace = False
         return node
 
     # TODO: call_function with a kwarg called 'inplace'
@@ -165,36 +165,41 @@ def handle_inplace(traced: fx.GraphModule, node: fx.Node) -> fx.Node:
 
 
 def preferred_name(node: fx.Node) -> str:
+    """Get the preferred name for a given node. Preferred name
+     is the qualified name if it exists. Otherwise, it's the regular
+     node name.
+
+    :param node: the node
+    :return: the preferred name
+    """
     if hasattr(node, 'qualified_name'):
         return node.qualified_name
     return node.name
 
 
-def insert_interjection(traced, node, interjection):
+def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
+                        interjection: Interjection):
     """
     Insert an interjection into the traced module at a given node. If the
-    interjection is of the wrapped type, then the
-    node is replaced with interjection (which wraps the original node);
-    otherwise the node is inserted immediately after
-    the node.
+    interjection is of the wrapped type, then the node is replaced with
+    interjection (which wraps the original node); otherwise the new node is
+    inserted immediately after the node.
 
-    :param traced:
-    :param node:
-    :param interjection:
-    :return:
+    :param graph_module: the traced module
+    :param node: the insertion point
+    :param interjection: the interjection to insert
     """
 
-    interjection_name = add_interjection(traced, interjection)
+    interjection_name = add_interjection(graph_module, interjection)
 
-    node = handle_inplace(traced, node)
+    node = handle_inplace(graph_module, node)
 
     if hasattr(interjection, '_wrapped'):
-        with traced.graph.inserting_after(node):
-            extracted = extract_node(traced, node)
+        with graph_module.graph.inserting_after(node):
+            extracted = extract_node(graph_module, node)
             # new node to represent the call to the interjection
-            new_node = traced.graph.call_module(interjection_name,
-                                                (preferred_name(node),
-                                                 node,))
+            args = (preferred_name(node), node,)
+            new_node = graph_module.graph.call_module(interjection_name, args)
             # register the extracted node that we wrap
             interjection.wrap(preferred_name(node), extracted)
             # clean everything up by replacing uses and inputs, then removing
@@ -202,16 +207,16 @@ def insert_interjection(traced, node, interjection):
             node.replace_all_uses_with(new_node)
             # FIXME: need to deal with multiple inputs
             new_node.replace_input_with(new_node, node.all_input_nodes[0])
-        traced.graph.erase_node(node)
+        graph_module.graph.erase_node(node)
     else:
-        with traced.graph.inserting_after(node):
+        with graph_module.graph.inserting_after(node):
             if node.op == 'call_module':
-                modules = dict(traced.named_modules())
+                modules = dict(graph_module.named_modules())
                 interjection.register_prev(preferred_name(node), modules[node.target])
 
             # create the interjection node after the current one
-            new_node = traced.graph.call_module(interjection_name,
-                                                (preferred_name(node), node,))
+            new_node = graph_module.graph.call_module(interjection_name,
+                                                      (preferred_name(node), node,))
             # and hook it to the graph
             node.replace_all_uses_with(new_node)
             new_node.replace_input_with(new_node, node)
@@ -222,10 +227,12 @@ def interject_by_module_class(model: nn.Module,
                               interjection: Interjection) -> DualGraphModule:
     """
     Adds an interjection to all nodes that represent a particular nn.Module
-    :param model:
-    :param target_module_class:
-    :param interjection:
-    :return:
+    within the provided model.
+
+    :param model: the model to add the interjection(s) to
+    :param target_module_class: the module to match for the insertion point
+    :param interjection: the interjection to insert
+    :return: the interjected model
     """
 
     selector = matches_module_class(target_module_class)
