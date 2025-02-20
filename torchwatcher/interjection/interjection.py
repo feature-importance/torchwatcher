@@ -22,14 +22,22 @@ class ForwardInterjection(Interjection):
 
     def __init__(self):
         super().__init__()
+        self._prev_node: dict[str, torch.fx.GraphModule | None] = {}
+
+    def register_prev(self, name: str, node: torch.fx.GraphModule | None):
+        self._prev_node[name] = node
+
+    def _get_prev(self, name: str):
+        if name in self._prev_node:
+            return self._prev_node[name]
+        return None
 
     @abc.abstractmethod
     def process(self, name: str, module: [None | nn.Module], inputs):
         pass
 
-    def forward(self, name, module: [None | nn.Module], *args):
-        return unpack(x_if_xp_is_none(args,
-                                      self.process(name, module, unpack(args))))
+    def forward(self, name, *args):
+        return unpack(x_if_xp_is_none(args, self.process(name, self._get_prev(name), unpack(args))))
 
 
 class WrappedForwardInterjection(Interjection):
@@ -44,11 +52,11 @@ class WrappedForwardInterjection(Interjection):
     def process(self, name: str, module: [None | nn.Module], inputs, outputs):
         pass
 
-    def forward(self, name, module: [None | nn.Module], *args, **kwargs):
+    def forward(self, name, *args, **kwargs):
         y = self._wrapped[name](*args, **kwargs)
 
         return unpack(
-            x_if_xp_is_none(y, self.process(name, module, unpack(args),
+            x_if_xp_is_none(y, self.process(name, self._wrapped[name], unpack(args),
                                             unpack(y))))
 
 

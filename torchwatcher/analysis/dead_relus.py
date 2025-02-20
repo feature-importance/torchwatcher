@@ -10,7 +10,6 @@ class DeadReLU(ForwardInterjection):
         self.masks = {}
 
     def process(self, name: str, module: [None | nn.Module], x: torch.Tensor):
-        print("DR ", type(module))
         if name not in self.masks:
             self.masks[name] = torch.zeros(x.shape[1:])
 
