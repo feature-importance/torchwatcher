@@ -188,12 +188,21 @@ def insert_interjection(traced, node, interjection):
 
     node = handle_inplace(traced, node)
 
+    if node.op == 'call_module':
+        # FIXME: Need to figure out how to point at the actual module
+        # modules = dict(traced.named_modules())
+        # module = modules[node.target]
+        module = node.target
+    else:
+        module = None
+
     if hasattr(interjection, '_wrapped'):
         with traced.graph.inserting_after(node):
             extracted = extract_node(traced, node)
             # new node to represent the call to the interjection
             new_node = traced.graph.call_module(interjection_name,
-                                                (preferred_name(node), node,))
+                                                (preferred_name(node), module,
+                                                 node,))
             # register the extracted node that we wrap
             interjection.wrap(preferred_name(node), extracted)
             # clean everything up by replacing uses and inputs, then removing
@@ -206,7 +215,8 @@ def insert_interjection(traced, node, interjection):
         with traced.graph.inserting_after(node):
             # create the interjection node after the current one
             new_node = traced.graph.call_module(interjection_name,
-                                                (preferred_name(node), node,))
+                                                (preferred_name(node),
+                                                 module, node,))
             # and hook it to the graph
             node.replace_all_uses_with(new_node)
             new_node.replace_input_with(new_node, node)

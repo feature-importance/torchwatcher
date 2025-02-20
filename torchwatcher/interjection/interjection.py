@@ -1,4 +1,5 @@
 import abc
+from typing import Union
 
 import torch
 import torch.nn as nn
@@ -18,15 +19,17 @@ class ForwardInterjection(Interjection):
     """
     Forward interjection that can be inserted _after_ particular nodes.
     """
+
     def __init__(self):
         super().__init__()
 
     @abc.abstractmethod
-    def process(self, name: str, inputs):
+    def process(self, name: str, module: [None | nn.Module], inputs):
         pass
 
-    def forward(self, name, *args):
-        return unpack(x_if_xp_is_none(args, self.process(name, unpack(args))))
+    def forward(self, name, module: [None | nn.Module], *args):
+        return unpack(x_if_xp_is_none(args,
+                                      self.process(name, module, unpack(args))))
 
 
 class WrappedForwardInterjection(Interjection):
@@ -38,14 +41,15 @@ class WrappedForwardInterjection(Interjection):
         self._wrapped[name] = module
 
     @abc.abstractmethod
-    def process(self, name, inputs, outputs):
+    def process(self, name: str, module: [None | nn.Module], inputs, outputs):
         pass
 
-    def forward(self, name, *args, **kwargs):
+    def forward(self, name, module: [None | nn.Module], *args, **kwargs):
         y = self._wrapped[name](*args, **kwargs)
 
         return unpack(
-            x_if_xp_is_none(y, self.process(name, unpack(args), unpack(y))))
+            x_if_xp_is_none(y, self.process(name, module, unpack(args),
+                                            unpack(y))))
 
 
 class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
@@ -53,7 +57,7 @@ class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
         super().__init__()
         self._handles: dict[str, RemovableHandle] = {}
 
-    def process(self, name, inputs, outputs):
+    def process(self, name, module: [None | nn.Module], inputs, outputs):
         # concrete implementation for convenience if subclasses only care
         # about backward. Just override if you want to hook both forward
         # and backward passes.
@@ -62,6 +66,7 @@ class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
     @abc.abstractmethod
     def process_backward(self,
                          name,
+                         module: [None | nn.Module],
                          grad_input: [tuple[torch.Tensor, ...] | torch.Tensor],
                          grad_output: [
                              tuple[torch.Tensor, ...] | torch.Tensor]) -> [
@@ -73,9 +78,13 @@ class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
 
         def hook(_: nn.Module,
                  grad_input: [tuple[torch.Tensor, ...] | torch.Tensor],
-                 grad_output: [tuple[torch.Tensor, ...] | torch.Tensor]) -> [
-            tuple[torch.Tensor] | torch.Tensor | None]:
-            return self.process_backward(name, unpack(grad_input),
+                 grad_output: [tuple[torch.Tensor, ...] | torch.Tensor]) -> \
+                [tuple[torch.Tensor] | torch.Tensor | None]:
+            return self.process_backward(name, module, unpack(grad_input),
                                          unpack(grad_output))
 
         self._handles[name] = module.register_full_backward_hook(hook)
+
+    def __del__(self):
+        for handle in self._handles.values():
+            handle.remove()

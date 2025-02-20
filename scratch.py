@@ -32,10 +32,10 @@ class MyForwardInterjection(ForwardInterjection):
 #
 #
 class MyWrappedForwardBackwardInterjection(WrappedForwardBackwardInterjection):
-    def process(self, name, input, output):
+    def process(self, name, module, input, output):
         print("forward", name, input.shape)
 
-    def process_backward(self, name, grad_input, grad_output):
+    def process_backward(self, name, module, grad_input, grad_output):
         print("backward", name,
               grad_input.shape if grad_input is not None else None)
 

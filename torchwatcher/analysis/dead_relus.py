@@ -1,4 +1,5 @@
 import torch
+from torch import nn
 
 from torchwatcher.interjection import ForwardInterjection
 
@@ -8,7 +9,8 @@ class DeadReLU(ForwardInterjection):
         super().__init__()
         self.masks = {}
 
-    def process(self, name: str, x: torch.Tensor):
+    def process(self, name: str, module: [None | nn.Module], x: torch.Tensor):
+        print("DR ", type(module))
         if name not in self.masks:
             self.masks[name] = torch.zeros(x.shape[1:])
 

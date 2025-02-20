@@ -6,15 +6,12 @@ from __future__ import annotations
 from os import linesep
 from typing import Any, Callable, Dict, List, Optional, Self, Tuple, Type
 
+from sympy.core.numbers import Infinity
 from torch.fx import GraphModule, Node
 from torch.nn import Module
 
 from torchwatcher import utils
 
-__all__ = ["NodeSelector", "is_module", "is_parametrized", "is_parametrised",
-           "matches_module_class", "matches_qualified_name", "matches_name",
-           "node_lambda", "select_all", "select_slice", "has_following",
-           "has_preceding"]
 
 IDENTITY_TRUE = utils.true
 IDENTITY_FALSE = utils.false
@@ -331,12 +328,29 @@ def has_following(
     NodeSelector:
       A node selector which checks following nodes.
   """
-    # TODO: implement
-    raise NotImplementedError()
+    if start is None:
+        start = 1
+    if stop is None:
+        stop = 1e9
 
+    def _select(nodestate: NodeState) -> bool:
+        node: Node = nodestate[1]
 
-HAS_PRECEDING_START = 1
-HAS_PRECEDING_STOP = None
+        i = 0
+        while i <= start:
+            node = node.next
+            i += 1
+        while i <= stop:
+            node = node.next
+            if node is None:
+                return False
+            if node_selector.fn((nodestate[0], node)):
+                return True
+            i += 1
+
+        return False
+
+    return NodeSelector(_select)
 
 
 def has_preceding(
@@ -378,8 +392,29 @@ def has_preceding(
     NodeSelector:
       A node selector which checks preceding nodes.
   """
-    # TODO: implement
-    raise NotImplementedError()
+    if start is None:
+        start = 1
+    if stop is None:
+        stop = 1e9
+
+    def _select(nodestate: NodeState) -> bool:
+        node: Node = nodestate[1]
+
+        i = 0
+        while i <= start:
+            node = node.prev
+            i += 1
+        while i <= stop:
+            node = node.prev
+            if node is None:
+                return False
+            if node_selector.fn((nodestate[0], node)):
+                return True
+            i += 1
+
+        return False
+
+    return NodeSelector(_select)
 
 
 # Node selector combinators:
@@ -401,17 +436,6 @@ def select_all(
       selector.
   """
     return node_selector
-
-
-def select_slice(
-        # Arguments:
-        node_selector: NodeSelector,
-        # Keyword Arguments:
-        start: Optional[int] = None,
-        stop: Optional[int] = None
-) -> NodeSelector:
-    # TODO: implement
-    raise NotImplementedError()
 
 
 # Node selector constructors:
