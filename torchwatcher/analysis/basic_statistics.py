@@ -1,8 +1,10 @@
-from .analysis import Analyzer, OUTPUTS, AnalyzerState
+import torch
+
+from .analysis import Analyzer, AnalyzerState
 from .running_stats import Variance
 
 
-class FeatureStatistics:
+class _FeatureStatistics:
     def __init__(self):
         self.channel_sparsity = Variance()
         self.channel_activations = Variance()
@@ -10,26 +12,31 @@ class FeatureStatistics:
 
 
 class FeatureStats(Analyzer):
+    """
+    Compute basic statistics of feature maps
+    """
     def __init__(self):
         super().__init__()
 
     def process_batch_state(self, name: str, state: AnalyzerState,
-                            working_results: FeatureStatistics | None) \
-        -> FeatureStatistics:
-        features = state[OUTPUTS]
-        channel_features = features.view(features.shape[0], 1, -1)
+                            working_results: _FeatureStatistics | None) \
+            -> _FeatureStatistics:
+        features = state.outputs
 
-        if working_results is None:
-            working_results = FeatureStatistics()
+        with torch.no_grad():
+            channel_features = features.detach().view(features.shape[0], 1, -1)
 
-        working_results.channel_sparsity.add(
-            channel_features.count_nonzero(dim=-1) / channel_features.shape[-1])
-        working_results.channel_activations.add(channel_features.mean(dim=-1))
-        working_results.feature_activations.add(features)
+            if working_results is None:
+                working_results = _FeatureStatistics()
+
+            working_results.channel_sparsity.add(
+                channel_features.count_nonzero(dim=-1) / channel_features.shape[-1])
+            working_results.channel_activations.add(channel_features.mean(dim=-1))
+            working_results.feature_activations.add(features)
 
         return working_results
 
-    def result_to_dict(self, result: FeatureStatistics) -> dict:
+    def result_to_dict(self, result: _FeatureStatistics) -> dict:
         rec = dict()
 
         rec['channel_sparsity_mean'] = result.channel_sparsity.mean()
