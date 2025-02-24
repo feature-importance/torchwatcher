@@ -90,6 +90,55 @@ could potentially be a tuple of tensors, a dictionary or anything else.
 
 #### Wrapped Interjections
 
+Wrapped interjections work by inserting a wrapper around a node in the 
+computational graph. The wrapper can access both the input to the wrapped 
+node and its outputs. Taking the previous example, if a wrapped interjection 
+is placed around `node_2`, the graph is transformed to
+
+           ↓
+         node_1
+           ↓
+         my_interjection(node_2)
+           ↓
+         node_3
+           ↓
+
+where internally `my_interjection` passes the output of `node_1` to `node_2` 
+and returns the output of the `node_2` call. The interjection my alter the 
+result of the `node_2` call but cannot modify the input (this could be 
+achieved by placing an interjection on the previous node however).
+
+We provide two base classes for wrapped interjections: the 
+`WrappedForwardInterjection` class lets you capture the inputs and outputs, 
+and the `WrappedForwardBackwardInterjection` additionally lets you capture the
+computed gradients of the node in question. The latter is particularly nice 
+as it lets you hook gradients for arbitrary parts of the graph, and not just 
+calls to `nn.Module` instances - you can capture gradients for calls to 
+`nn.functional` functions for example.
+
+`WrappedForwardInterjection` require you implement a `process` method:
+
+    class MyWrappedFwd(WrappedForwardInterjection):
+        def process(self, name, module, inputs, outputs):
+            print(name)
+
+    my_interjection = MyWrappedFwd()
+
+Using `WrappedForwardBackwardInterjection` involves implementing the 
+`process_backward` method, and optionally, the `process` method if you also 
+want to interject the forward pass
+
+    class MyWrappedFwdBwd(WrappedForwardBackwardInterjection):
+        def process(self, name, module, inputs, outputs):
+            print(name)
+
+        def process_backward(self, name, module, grad_input, grad_output):
+            print(name)
+
+    my_interjection = MyWrappedFwdBwd()
+
+As with the forward interjection, the node name is passed to the `process`
+
 ### Adding interjections to the graph
 
 #### Inserting by matching a module
