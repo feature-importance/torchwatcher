@@ -75,12 +75,13 @@ To use a `ForwardInterjection` you must create a subclass and override the
 `process` method:
 
     class MyForwardInterjection(ForwardInterjection):
-        def process(self, name: str, inputs):
+        def process(self, name: str, module: nn.Module | None, inputs):
             print(name, inputs.shape)
 
     my_interjection = MyForwardInterjection()
 
-The arguments to `process` are the respective node's name, and its outputs 
+The arguments to `process` are the respective node's name, the module (if 
+the previous node was an `nn.Module`; `None` otherwise) and its outputs 
 (presented as the inputs to the interjection). The node name is important 
 because the same interjection instance might be inserted at multiple points 
 in the graph. The name allows you to disambiguate which node is providing 
@@ -137,7 +138,11 @@ want to interject the forward pass
 
     my_interjection = MyWrappedFwdBwd()
 
-As with the forward interjection, the node name is passed to the `process`
+As with the forward interjection, the node name is passed to both `process` 
+methods, together with the inputs and outputs (or input gradients and output 
+gradients). If the interjection was wrapping an underlying `nn.Module` instance,
+a reference to that instance is also passed along (this will be `None` if a 
+different type of node in the compute graph was wrapped).
 
 ### Adding interjections to the graph
 

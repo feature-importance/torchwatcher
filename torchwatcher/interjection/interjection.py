@@ -12,7 +12,17 @@ class Interjection(nn.Module, metaclass=abc.ABCMeta):
     """
     Base class for all interjection types.
     """
-    pass
+    def register(self, name: str, node: torch.fx.GraphModule | None):
+        """
+        Called when an interjection is added to the graph. Subclasses can
+        override if they need to perform actions before the forward method
+        and subsequent process methods are called.
+
+        Args:
+            name (str): Name of the interjection.
+            node: the module
+        """
+        pass
 
 
 class ForwardInterjection(Interjection):
@@ -24,13 +34,8 @@ class ForwardInterjection(Interjection):
         super().__init__()
         self._prev_node: dict[str, torch.fx.GraphModule | None] = {}
 
-    def register_prev(self, name: str, node: torch.fx.GraphModule | None):
+    def register(self, name: str, node: torch.fx.GraphModule | None):
         self._prev_node[name] = node
-
-    def _get_prev(self, name: str):
-        if name in self._prev_node:
-            return self._prev_node[name]
-        return None
 
     @abc.abstractmethod
     def process(self, name: str, module: [None | nn.Module], inputs):
@@ -54,7 +59,7 @@ class ForwardInterjection(Interjection):
     def forward(self, name, *args):
         return unpack(
             x_if_xp_is_none(args, self
-                            .process(name, self._get_prev(name), unpack(args))))
+                            .process(name, self._prev_node[name], unpack(args))))
 
 
 class WrappedForwardInterjection(Interjection):
@@ -62,7 +67,7 @@ class WrappedForwardInterjection(Interjection):
         super().__init__()
         self._wrapped: dict[str, torch.fx.GraphModule] = {}
 
-    def wrap(self, name: str, module: torch.fx.GraphModule):
+    def register(self, name: str, module: torch.fx.GraphModule):
         self._wrapped[name] = module
 
     @abc.abstractmethod

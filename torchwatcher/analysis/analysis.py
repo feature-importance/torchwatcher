@@ -4,11 +4,9 @@ from typing import Callable, Any
 
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset
 
 from torchwatcher.interjection import WrappedForwardBackwardInterjection, \
     WrappedForwardInterjection
-from torchwatcher.interjection.interjection import Interjection
 
 
 class TargetException(Exception):
@@ -113,8 +111,10 @@ class Analyzer(WrappedForwardInterjection):
         self.working_results: dict[str, Any] = {}
 
         self.gradient = gradient
+        # store the ref to the inter in a tuple to stop it being registered
+        # otherwise we'll have cyclic dependencies
         if gradient:
-            self.interjection = (FBInter(self),)
+            self.interjection = (FBInter(self), )
         else:
             self.interjection = (FInter(self), )
 
@@ -124,10 +124,10 @@ class Analyzer(WrappedForwardInterjection):
     def forward(self, name, *args):
         return self.interjection[0](name, *args)
 
-    def wrap(self,
+    def register(self,
              name: str,
              module: torch.fx.GraphModule):
-        self.interjection[0].wrap(name, module)
+        self.interjection[0].register(name, module)
 
     def process(self,
                 name: str,
@@ -248,8 +248,7 @@ class PerClassAnalyzer(Analyzer):
     """
     def __init__(self, analyzer):
         super().__init__()
-        self.analyzer = (analyzer,)  # wrapped in a tuple to stop it being
-        # registered as a child module!
+        self.analyzer = analyzer
         self.analyzers = {}
 
     def log_forward(self, name, module, inputs, outputs):
@@ -257,7 +256,7 @@ class PerClassAnalyzer(Analyzer):
 
         for c in classes.unique():
             if c not in self.analyzers:
-                self.analyzers[c] = copy.deepcopy(self.analyzer[0])
+                self.analyzers[c] = copy.deepcopy(self.analyzer)
 
             analyzer = self.analyzers[c]
             analyzer.targets = self.targets[classes == c]

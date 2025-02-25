@@ -201,7 +201,7 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
             args = (preferred_name(node), node,)
             new_node = graph_module.graph.call_module(interjection_name, args)
             # register the extracted node that we wrap
-            interjection.wrap(preferred_name(node), extracted)
+            interjection.register(preferred_name(node), extracted)
             # clean everything up by replacing uses and inputs, then removing
             # the original node
             node.replace_all_uses_with(new_node)
@@ -212,7 +212,10 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
         with graph_module.graph.inserting_after(node):
             if node.op == 'call_module':
                 modules = dict(graph_module.named_modules())
-                interjection.register_prev(preferred_name(node), modules[node.target])
+                module = modules[node.target]
+            else:
+                module = None
+            interjection.register(preferred_name(node), module)
 
             # create the interjection node after the current one
             new_node = graph_module.graph.call_module(interjection_name,
@@ -270,7 +273,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
         # GraphModule, but not the underlying model. We copy those added modules
         # over.
         model_modules = dict(model.named_modules())
-        for name, module in traced.named_modules():
+        for name, module in traced.named_children():
             if name not in model_modules:
                 model.add_module(name, module)
 
