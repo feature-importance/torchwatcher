@@ -1,11 +1,11 @@
 import abc
 import copy
-from typing import Callable, Any
+from typing import Any
 
 import torch
 import torch.nn as nn
 
-from torchwatcher.interjection import WrappedForwardBackwardInterjection, \
+from src.torchwatcher.interjection import WrappedForwardBackwardInterjection, \
     WrappedForwardInterjection
 
 
@@ -26,9 +26,9 @@ class NoGradException(Exception):
 
 
 class AnalyzerState():
-    """
-    State held by an analyzer and used to update the results of the analysis.
-    """
+    """State held by an analyzer and used to update the results of the
+    analysis."""
+
     def __init__(self):
         super().__init__()
 
@@ -100,10 +100,9 @@ class FBInter(WrappedForwardBackwardInterjection):
         self._analyzer.log_backward(name, module, grad_input, grad_output)
 
 
-class Analyzer(WrappedForwardInterjection):
-    """
-    Abstract base class for analyzer implementations.
-    """
+class Analyzer[T](WrappedForwardInterjection):
+    """Abstract base class for analyzer implementations."""
+
     def __init__(self, gradient=False):
         super().__init__()
 
@@ -114,9 +113,9 @@ class Analyzer(WrappedForwardInterjection):
         # store the ref to the inter in a tuple to stop it being registered
         # otherwise we'll have cyclic dependencies
         if gradient:
-            self.interjection = (FBInter(self), )
+            self.interjection = (FBInter(self),)
         else:
-            self.interjection = (FInter(self), )
+            self.interjection = (FInter(self),)
 
         self._targets = None
         self._targets_set = False
@@ -125,8 +124,8 @@ class Analyzer(WrappedForwardInterjection):
         return self.interjection[0](name, *args)
 
     def register(self,
-             name: str,
-             module: torch.fx.GraphModule):
+                 name: str,
+                 module: torch.fx.GraphModule):
         self.interjection[0].register(name, module)
 
     def process(self,
@@ -180,29 +179,29 @@ class Analyzer(WrappedForwardInterjection):
         else:
             working = None
 
-        self.working_results[name] = self.process_batch_state(name, state, working)
+        self.working_results[name] = self.process_batch_state(name, state,
+                                                              working)
 
     @abc.abstractmethod
     def process_batch_state(self,
                             name: str,
                             state: AnalyzerState,
-                            working_results: Any | None):
+                            working_results: T | None) -> T | None:
         pass
 
-    def finalise_result(self, result) -> dict:
+    def finalise_result(self, name: str, result: T) -> T:
         return result
 
     def to_dict(self) -> dict:
         return {
-            k: self.finalise_result(v)
+            k: self.finalise_result(k, v)
             for k, v in self.working_results.items()
         }
 
 
-class AnalyzerList(Analyzer):
-    """
-    Wraps multiple analyzers into a single analyzer.
-    """
+class AnalyzerList(Analyzer[Any]):
+    """Wraps multiple analyzers into a single analyzer."""
+
     def __init__(self, *args: Analyzer):
         super().__init__()
         self.analyzers = args
@@ -242,12 +241,13 @@ class AnalyzerList(Analyzer):
         return result
 
 
-class PerClassAnalyzer(Analyzer):
-    """
-    Wraps an Analyzer so that it tracks statistics separately for each class.
-    """
+class PerClassAnalyzer(Analyzer[Any]):
+    """Wraps an Analyzer so that it tracks statistics separately for each
+     class."""
+
     def __init__(self, analyzer):
         super().__init__()
+
         self.analyzer = analyzer
         self.analyzers = {}
 
@@ -290,10 +290,10 @@ class PerClassAnalyzer(Analyzer):
 
 
 class PerClassVersusAnalyzer(PerClassAnalyzer):
-    """
-    Wraps an Analyzer so that it tracks statistics separately for each class
+    """Wraps an Analyzer so that it tracks statistics separately for each class
     and "not" each class.
     """
+
     def __init__(self, analyzer):
         super().__init__(analyzer)
 
@@ -327,13 +327,8 @@ class PerClassVersusAnalyzer(PerClassAnalyzer):
                                       grad_output[classes == c])
 
 
-class NameAnalyzer(Analyzer):
-    """
-    Just logs the layer name(s)
-    """
+class NameAnalyzer(Analyzer[str]):
+    """Just logs the layer name(s)"""
+
     def process_batch_state(self, name, state, result):
         return name
-
-    def finalise_result(self, result) -> dict:
-        return {'name': result}
-

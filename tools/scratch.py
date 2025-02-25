@@ -1,18 +1,13 @@
 from functools import partial
+from pprint import pprint
 
 import torch
-from torch import nn
 from torchvision.models import resnet18
-from torchvision.models.feature_extraction import get_graph_node_names
 
-from torchwatcher.analysis.analysis import PerClassAnalyzer
-from torchwatcher.analysis.basic_statistics import FeatureStats
-from torchwatcher.analysis.dead_relus import DeadReLU
-from torchwatcher.analysis.linear_probe import LinearProbe
-from torchwatcher.interjection import interject_by_match, ForwardInterjection, \
-    WrappedForwardBackwardInterjection, interject_by_module_class
-from torchwatcher.interjection.node_selector import node_types
-import torchwatcher.interjection.node_selector as node_selector
+from src.torchwatcher.analysis.linear_probe import LinearProbe
+from src.torchwatcher.interjection import interject_by_match, ForwardInterjection, \
+    WrappedForwardBackwardInterjection
+from src.torchwatcher.interjection.node_selector import node_types
 
 
 class MyForwardInterjection(ForwardInterjection):
@@ -103,4 +98,4 @@ for i in range(5):
     targets = torch.randint(0, 3, (10,))
     lp.targets = targets
     net2(torch.rand(10, 3, 224, 224))
-print(lp.to_dict())
+pprint(lp.to_dict())

@@ -1,5 +1,4 @@
-"""
-http://davidbau.com/archives/2021/12/28/running_statistics_for_pytorch.html
+"""http://davidbau.com/archives/2021/12/28/running_statistics_for_pytorch.html
 https://github.com/davidbau/rome/blob/a538ceb35bbefd2f5ed4a15501929b0f78a2a20b/util/runningstats.py
 
 To use a runningstats object,
@@ -56,8 +55,7 @@ from torch.utils.data.sampler import Sampler
 
 
 def tally(stat, dataset, cache=None, quiet=False, **kwargs):
-    """
-    To use tally, write code like the following.
+    """To use tally, write code like the following.
 
         stat = Mean()
         ds = MyDataset()
@@ -125,8 +123,7 @@ def tally(stat, dataset, cache=None, quiet=False, **kwargs):
 
 
 class cache_load_enabled:
-    """
-    When used as a context manager, cache_load_enabled(False) will prevent
+    """When used as a context manager, cache_load_enabled(False) will prevent
     tally from loading cached statistics, forcing them to be recomputed.
     """
 
@@ -145,21 +142,17 @@ class cache_load_enabled:
 
 
 class Stat(ABC):
-    """
-    Abstract base class for a running pytorch statistic.
-    """
+    """Abstract base class for a running pytorch statistic."""
 
     def __init__(self, state):
-        """
-        By convention, all Stat subclasses can be initialized by passing
+        """By convention, all Stat subclasses can be initialized by passing
         state=; and then they will initialize by calling load_state_dict.
         """
         self.load_state_dict(resolve_state_dict(state))
 
     @abc.abstractmethod
     def add(self, x, *_, **__):
-        """
-        Observes a batch of samples to be incorporated into the statistic.
+        """Observes a batch of samples to be incorporated into the statistic.
         Dimension 0 should be the batch dimension, and dimension 1 should
         be the feature dimension of the pytorch tensor x.
         """
@@ -167,55 +160,41 @@ class Stat(ABC):
 
     @abc.abstractmethod
     def load_state_dict(self, d):
-        """
-        Loads this Stat from a dictionary of numpy arrays as saved
+        """Loads this Stat from a dictionary of numpy arrays as saved
         by state_dict.
         """
         pass
 
     @abc.abstractmethod
     def state_dict(self):
-        """
-        Saves this Stat as a dictionary of numpy arrays that can be
+        """Saves this Stat as a dictionary of numpy arrays that can be
         stored in an npz or reloaded later using load_state_dict.
         """
         return {}
 
     def save(self, filename):
-        """
-        Saves this stat as an npz file containing the state_dict.
-        """
+        """Saves this stat as an npz file containing the state_dict."""
         save_cached_state(filename, self, {})
 
     def load(self, filename):
-        """
-        Loads this stat from an npz file containing a saved state_dict.
-        """
+        """Loads this stat from an npz file containing a saved state_dict."""
         self.load_state_dict(load_cached_state(filename, {}, quiet=True, throw=True))
 
     @abc.abstractmethod
     def to_(self, device):
-        """
-        Moves this Stat to the given device.
-        """
+        """Moves this Stat to the given device."""
         pass
 
     def cpu_(self):
-        """
-        Moves this Stat to the cpu device.
-        """
+        """Moves this Stat to the cpu device."""
         self.to_("cpu")
 
     def cuda_(self):
-        """
-        Moves this Stat to the default cuda device.
-        """
+        """Moves this Stat to the default cuda device."""
         self.to_("cuda")
 
     def _normalize_add_shape(self, x, attr="data_shape"):
-        """
-        Flattens input data to 2d.
-        """
+        """Flattens input data to 2d."""
         if not torch.is_tensor(x):
             x = torch.tensor(x)
         if len(x.shape) < 1:
@@ -229,9 +208,7 @@ class Stat(ABC):
         return x.view(x.shape[0], int(numpy.prod(data_shape)))
 
     def _restore_result_shape(self, x, attr="data_shape"):
-        """
-        Restores output data to input data shape.
-        """
+        """Restores output data to input data shape."""
         data_shape = getattr(self, attr, None)
         if data_shape is None:
             return x
@@ -239,9 +216,7 @@ class Stat(ABC):
 
 
 class Mean(Stat):
-    """
-    Running mean.
-    """
+    """Running mean."""
 
     def __init__(self, state=None):
         if state is not None:
@@ -301,9 +276,7 @@ class Mean(Stat):
 
 
 class NormMean(Mean):
-    """
-    Running average of the norm of input vectors
-    """
+    """Running average of the norm of input vectors"""
 
     def __init__(self, state=None):
         super().__init__(state)
@@ -313,8 +286,7 @@ class NormMean(Mean):
 
 
 class Variance(Stat):
-    """
-    Running computation of mean and variance. Use this when you just need
+    """Running computation of mean and variance. Use this when you just need
     basic stats without covariance.
     """
 
@@ -395,8 +367,7 @@ class Variance(Stat):
 
 
 class Covariance(Stat):
-    """
-    Running computation. Use this when the entire covariance matrix is needed,
+    """Running computation. Use this when the entire covariance matrix is needed,
     and when the whole covariance matrix fits in the GPU.
 
     Chan-style numerically stable update of mean and full covariance matrix.
@@ -480,8 +451,7 @@ class Covariance(Stat):
 
 
 class SecondMoment(Stat):
-    """
-    Running computation. Use this when the entire non-centered 2nd-moment
+    """Running computation. Use this when the entire non-centered 2nd-moment
     'covariance-like' matrix is needed, and when the whole matrix fits
     in the GPU.
     """
@@ -527,8 +497,7 @@ class SecondMoment(Stat):
 
 
 class Bincount(Stat):
-    """
-    Running bincount.  The counted array should be an integer type with
+    """Running bincount.  The counted array should be an integer type with
     non-negative integers.
     """
 
@@ -577,8 +546,7 @@ class Bincount(Stat):
 
 
 class CrossCovariance(Stat):
-    """
-    Covariance. Use this when an off-diagonal block of the covariance
+    """Covariance. Use this when an off-diagonal block of the covariance
     matrix is needed (e.g., when the whole covariance matrix does
     not fit in the GPU, this could use a quarter of the memory).
 
@@ -674,8 +642,7 @@ class CrossCovariance(Stat):
 
 
 def _float_from_bool(a):
-    """
-    Since pytorch only supports matrix multiplication on float,
+    """Since pytorch only supports matrix multiplication on float,
     IoU computations are done using floating point types.
 
     This function binarizes the input (positive to True and
@@ -691,9 +658,7 @@ def _float_from_bool(a):
 
 
 class IoU(Stat):
-    """
-    Running computation of intersections and unions of all features.
-    """
+    """Running computation of intersections and unions of all features."""
 
     def __init__(self, state=None):
         if state is not None:
@@ -740,9 +705,7 @@ class IoU(Stat):
 
 
 class CrossIoU(Stat):
-    """
-    Running computation of intersections and unions of two binary vectors.
-    """
+    """Running computation of intersections and unions of two binary vectors."""
 
     def __init__(self, state=None):
         if state is not None:
@@ -805,8 +768,7 @@ class CrossIoU(Stat):
 
 
 class Quantile(Stat):
-    """
-    Streaming randomized quantile computation for torch.
+    """Streaming randomized quantile computation for torch.
 
     Add any amount of data repeatedly via add(data).  At any time,
     quantile estimates be read out using quantile(q).
@@ -1145,8 +1107,7 @@ class Quantile(Stat):
         return self.quantiles(torch.linspace(0.0, 1.0, count))
 
     def normalize(self, data):
-        """
-        Given input data as taken from the training distirbution,
+        """Given input data as taken from the training distirbution,
         normalizes every channel to reflect quantile values,
         uniformly distributed, within [0, 1].
         """
@@ -1173,8 +1134,7 @@ class Quantile(Stat):
 
 
 def sample_portion(vec, p=0.5):
-    """
-    Subsamples a fraction (given by p) of the given batch.  Used by
+    """Subsamples a fraction (given by p) of the given batch.  Used by
     Quantile when the data gets very very large.
     """
     bits = torch.bernoulli(
@@ -1184,8 +1144,7 @@ def sample_portion(vec, p=0.5):
 
 
 class TopK:
-    """
-    A class to keep a running tally of the the top k values (and indexes)
+    """A class to keep a running tally of the the top k values (and indexes)
     of any number of torch feature components.  Will work on the GPU if
     the data is on the GPU.  Tracks largest by default, but tracks smallest
     if largest=False is passed.
@@ -1212,8 +1171,7 @@ class TopK:
         self.largest = largest
 
     def add(self, data, index=None):
-        """
-        Adds a batch of data to be considered for the running top k.
+        """Adds a batch of data to be considered for the running top k.
         The zeroth dimension enumerates the observations.  All other
         dimensions enumerate different features.
         """
@@ -1258,8 +1216,7 @@ class TopK:
         return self.count
 
     def topk(self, sorted=True, flat=False):
-        """
-        Returns top k data items and indexes in each dimension,
+        """Returns top k data items and indexes in each dimension,
         with channels in the first dimension and k in the last dimension.
         """
         k = min(self.k, self.next)
@@ -1323,9 +1280,7 @@ class TopK:
 
 
 class History(Stat):
-    """
-    Accumulates the concatenation of all the added data.
-    """
+    """Accumulates the concatenation of all the added data."""
 
     def __init__(self, data=None, state=None):
         if state is not None:
@@ -1371,8 +1326,7 @@ class History(Stat):
 
 
 class CombinedStat(Stat):
-    """
-    A Stat that bundles together multiple Stat objects.
+    """A Stat that bundles together multiple Stat objects.
     Convenient for loading and saving a state_dict made up of a
     hierarchy of stats, and for use with the tally() function.
     Example:
@@ -1416,16 +1370,14 @@ class CombinedStat(Stat):
 
 
 def push_key_prefix(prefix, d):
-    """
-    Returns a dict with the same values as d, but where each key
+    """Returns a dict with the same values as d, but where each key
     adds the prefix, followed by a dot.
     """
     return {prefix + "." + k: v for k, v in d.items()}
 
 
 def pull_key_prefix(prefix, d):
-    """
-    Returns a filtered dict of all the items of d that start with
+    """Returns a filtered dict of all the items of d that start with
     the given key prefix, plus a dot, with that prefix removed.
     """
     pd = prefix + "."
@@ -1447,9 +1399,7 @@ null_numpy_value = numpy.array(
 
 
 def is_null_numpy_value(v):
-    """
-    True if v is a 64-bit float numpy scalar NaN matching null_numpy_value.
-    """
+    """True if v is a 64-bit float numpy scalar NaN matching null_numpy_value."""
     return (
             isinstance(v, numpy.ndarray)
             and numpy.ndim(v) == 0
@@ -1460,8 +1410,7 @@ def is_null_numpy_value(v):
 
 
 def box_numpy_null(d):
-    """
-    Replaces None with null_numpy_value, leaving non-None values unchanged.
+    """Replaces None with null_numpy_value, leaving non-None values unchanged.
     Recursively descends into a dictionary replacing None values.
     """
     try:
@@ -1471,8 +1420,7 @@ def box_numpy_null(d):
 
 
 def unbox_numpy_null(d):
-    """
-    Reverses box_numpy_null, replacing null_numpy_value with None.
+    """Reverses box_numpy_null, replacing null_numpy_value with None.
     Recursively descends into a dictionary replacing None values.
     """
     try:
@@ -1482,9 +1430,7 @@ def unbox_numpy_null(d):
 
 
 def resolve_state_dict(s):
-    """
-    Resolves a state, which can be a filename or a dict-like object.
-    """
+    """Resolves a state, which can be a filename or a dict-like object."""
     if isinstance(s, str):
         return unbox_numpy_null(numpy.load(s))
     return s
@@ -1494,9 +1440,7 @@ global_load_cache_enabled = True
 
 
 def load_cached_state(cachefile, args, quiet=False, throw=False):
-    """
-    Resolves a state, which can be a filename or a dict-like object.
-    """
+    """Resolves a state, which can be a filename or a dict-like object."""
     if not global_load_cache_enabled or cachefile is None:
         return None
     try:
@@ -1521,9 +1465,7 @@ def load_cached_state(cachefile, args, quiet=False, throw=False):
 
 
 def save_cached_state(cachefile, obj, args):
-    """
-    Saves the state_dict of the given object in a dict or npz file.
-    """
+    """Saves the state_dict of the given object in a dict or npz file."""
     if cachefile is None:
         return
     dat = obj.state_dict()
@@ -1562,8 +1504,7 @@ class FixedSubsetSampler(Sampler):
         return FixedSubsetSampler(self.dereference(new_subset))
 
     def dereference(self, indices):
-        """
-        Translate output sample indices (small numbers indexing the sample)
+        """Translate output sample indices (small numbers indexing the sample)
         to input sample indices (larger number indexing the original full set)
         """
         return [self.samples[i] for i in indices]
@@ -1585,9 +1526,7 @@ class FixedRandomSubsetSampler(FixedSubsetSampler):
         super(FixedRandomSubsetSampler, self).__init__(shuffled[start:end])
 
     def class_subset(self, class_filter):
-        """
-        Returns only the subset matching the given rule.
-        """
+        """Returns only the subset matching the given rule."""
         if isinstance(class_filter, int):
 
             def rule(d):

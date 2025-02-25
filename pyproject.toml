@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torchwatcher"
+dynamic = ["version"]
+dependencies = [
+    "torch~=2.6.0",
+    "torchbearer~=0.5.5",
+    "numpy~=2.2.2",
+    'model-utilities @ git+ssh://git@github.com/feature-importance/model-utilities.git',
+]
+requires-python = ">=3.11"
+authors = [
+  {name = "Jonathon Hare", email = "jsh2@soton.ac.uk"},
+  {name = "Antonia Marcu", email = "a.marcu@soton.ac.uk"},
+  {name = "Jay Bear", email = "jdh1g19@soton.ac.uk"}
+]
+description = "Utility functions for model training, etc"
+readme = "README.md"
+license = { file = "LICENSE" }
+keywords = []
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python"
+]
+
+[project.optional-dependencies]
+
+[project.urls]
+Homepage = "https://github.com/feature-importance/torchwather"
+Documentation = "https://github.com/feature-importance/torchwather"
+Repository = "https://github.com/feature-importance/torchwather.git"
+"Bug Tracker" = "https://github.com/feature-importance/torchwather/issues"
+
+[tool.setuptools.dynamic]
+version = {attr = "torchwatcher.__version__"}

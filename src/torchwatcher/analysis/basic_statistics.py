@@ -11,10 +11,8 @@ class _FeatureStatistics:
         self.feature_activations = Variance()
 
 
-class FeatureStats(Analyzer):
-    """
-    Compute basic statistics of feature maps
-    """
+class FeatureStats(Analyzer[_FeatureStatistics]):
+    """Compute basic statistics of feature maps"""
     def __init__(self):
         super().__init__()
 
@@ -36,7 +34,7 @@ class FeatureStats(Analyzer):
 
         return working_results
 
-    def finalise_result(self, result: _FeatureStatistics) -> dict:
+    def finalise_result(self, name:str, result: _FeatureStatistics) -> dict:
         rec = dict()
 
         rec['channel_sparsity_mean'] = result.channel_sparsity.mean()

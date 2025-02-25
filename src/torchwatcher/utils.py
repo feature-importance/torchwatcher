@@ -9,7 +9,8 @@ def x_if_xp_is_none(x, xp):
 
 def unpack(result):
     """unpacks a single-item tuple, and returns the input if its not a single
-    item tuple"""
+    item tuple
+    """
     return result[0] if (isinstance(result, tuple) and
                          len(result) == 1) else result
 

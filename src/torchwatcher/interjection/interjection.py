@@ -1,34 +1,28 @@
 import abc
-from typing import Union
 
 import torch
 import torch.nn as nn
 from torch.utils.hooks import RemovableHandle
 
-from torchwatcher.utils import unpack, x_if_xp_is_none
+from src.torchwatcher.utils import unpack, x_if_xp_is_none
 
 
 class Interjection(nn.Module, metaclass=abc.ABCMeta):
-    """
-    Base class for all interjection types.
-    """
+    """Base class for all interjection types."""
     def register(self, name: str, node: torch.fx.GraphModule | None):
-        """
-        Called when an interjection is added to the graph. Subclasses can
+        """Called when an interjection is added to the graph. Subclasses can
         override if they need to perform actions before the forward method
         and subsequent process methods are called.
 
         Args:
-            name (str): Name of the interjection.
+            name: Name of the interjection.
             node: the module
         """
         pass
 
 
 class ForwardInterjection(Interjection):
-    """
-    Forward interjection that can be inserted _after_ particular nodes.
-    """
+    """Forward interjection that can be inserted _after_ particular nodes."""
 
     def __init__(self):
         super().__init__()
@@ -39,20 +33,21 @@ class ForwardInterjection(Interjection):
 
     @abc.abstractmethod
     def process(self, name: str, module: [None | nn.Module], inputs):
-        """
-        Process the output of the interjected node.
+        """Process the output of the interjected node.
 
         You must not change the input inplace, but you can optionally return
         a modified version of the inputs to pass along in the graph.
 
         Args:
             name: the name of the interjected node.
-            module: the actual module that was interjected. This will be None
-            if the interjection was not inserted after a module, but rather
-            after a function call or similar.
+            module: the actual module that was interjected. This will be
+                None if the interjection was not inserted after a
+                module, but rather after a function call or similar.
             inputs: the outputs of the interjected node.
 
-        Returns: None, or an object of the same type(s) and shape(s) as inputs.
+        Returns:
+            None, or an object of the same type(s) and shape(s) as
+            inputs.
         """
         pass
 

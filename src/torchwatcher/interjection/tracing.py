@@ -12,10 +12,13 @@ from .node_selector import NodeSelector, matches_module_class
 
 
 def _get_name(model: Union[torch.nn.Module, Callable[..., Any]]) -> str:
-    """
-    Get the name of a model; used for naming the wrapped GraphModule.
-    :param model: the model
-    :return: the name
+    """Get the name of a model; used for naming the wrapped GraphModule.
+
+    Args:
+        model: the model
+
+    Returns:
+        the name
     """
     if isinstance(model, nn.Module):
         return model.__class__.__name__
@@ -27,14 +30,13 @@ def symbolic_trace(model: Union[torch.nn.Module, Callable[..., Any]],
                    tracer_kwargs: Optional[Dict[str, Any]] = None,
                    concrete_args: Optional[Dict[str, Any]] = None
                    ) -> fx.GraphModule:
-    """
-    Custom symbolic tracing using functionality in torchvision's feature
+    """Custom symbolic tracing using functionality in torchvision's feature
     extraction framework.
 
-    :param model: the model to trace
-    :param tracer_kwargs: extra arguments for the tracer
-    :param concrete_args:
-    :return:
+    Args:
+        model: the model to trace
+        tracer_kwargs: extra arguments for the tracer
+        concrete_args
     """
     # Instantiate our NodePathTracer and use that to trace the model
     tracer_kwargs = _set_default_tracer_kwargs(tracer_kwargs)
@@ -54,13 +56,15 @@ def symbolic_trace(model: Union[torch.nn.Module, Callable[..., Any]],
 
 
 def get_fresh_qualname(traced: fx.GraphModule, prefix: str) -> str:
-    """
-    Generate a unique qualified name for a module that will be added to the
+    """Generate a unique qualified name for a module that will be added to the
     graph.
 
-    :param traced: the traced module
-    :param prefix: prefix for qualified names
-    :return: the generated name
+    Args:
+        traced: the traced module
+        prefix: prefix for qualified names
+
+    Returns:
+        the generated name
     """
 
     i = 0
@@ -74,12 +78,14 @@ def get_fresh_qualname(traced: fx.GraphModule, prefix: str) -> str:
 
 
 def find_nodes(graph: fx.Graph, op) -> List[fx.Node]:
-    """
-    Find nodes in the graph matching a given operation.
+    """Find nodes in the graph matching a given operation.
 
-    :param graph: graph to search
-    :param op: operation to search for
-    :return: matching nodes
+    Args:
+        graph: graph to search
+        op: operation to search for
+
+    Returns:
+        matching nodes
     """
 
     return list(filter(lambda n: n.op == op, graph.nodes))
@@ -87,15 +93,17 @@ def find_nodes(graph: fx.Graph, op) -> List[fx.Node]:
 
 def extract_node(graph_module: fx.GraphModule,
                  target_node: fx.Node) -> fx.GraphModule:
-    """
-    Extract a node into its own module/graph, re-writing inputs as appropriate.
+    """Extract a node into its own module/graph, re-writing inputs as appropriate.
 
     This trims all extraneous bits from the graph, just leaving the node of
     interest.
 
-    :param graph_module: the graph module to extract from
-    :param target_node: the node to extract
-    :return: the new GraphModule with just that single node in it
+    Args:
+        graph_module: the graph module to extract from
+        target_node: the node to extract
+
+    Returns:
+        the new GraphModule with just that single node in it
     """
     gm = copy.deepcopy(graph_module)
 
@@ -125,8 +133,7 @@ def extract_node(graph_module: fx.GraphModule,
 
 def add_interjection(graph_module: fx.GraphModule,
                      interjection: Interjection) -> str:
-    """
-    Add (or find if it already exists) the given interjection and return its
+    """Add (or find if it already exists) the given interjection and return its
     name. A Unique name is generated for the cases it's not in the traced
     module already.
 
@@ -134,9 +141,12 @@ def add_interjection(graph_module: fx.GraphModule,
     called, the name of the node is passed along so that if it's reused
     across multiple points the user can tell where it's coming from.
 
-    :param graph_module: the graph module to add the interjection to
-    :param interjection: the interjection to add
-    :return: the name of the interjection module within the graph_module
+    Args:
+        graph_module: the graph module to add the interjection to
+        interjection: the interjection to add
+
+    Returns:
+        the name of the interjection module within the graph_module
     """
     for name, module in graph_module.named_modules():
         if module == interjection:
@@ -169,8 +179,11 @@ def preferred_name(node: fx.Node) -> str:
      is the qualified name if it exists. Otherwise, it's the regular
      node name.
 
-    :param node: the node
-    :return: the preferred name
+    Args:
+        node: the node
+
+    Returns:
+        the preferred name
     """
     if hasattr(node, 'qualified_name'):
         return node.qualified_name
@@ -179,15 +192,15 @@ def preferred_name(node: fx.Node) -> str:
 
 def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
                         interjection: Interjection):
-    """
-    Insert an interjection into the traced module at a given node. If the
+    """Insert an interjection into the traced module at a given node. If the
     interjection is of the wrapped type, then the node is replaced with
     interjection (which wraps the original node); otherwise the new node is
     inserted immediately after the node.
 
-    :param graph_module: the traced module
-    :param node: the insertion point
-    :param interjection: the interjection to insert
+    Args:
+        graph_module: the traced module
+        node: the insertion point
+        interjection: the interjection to insert
     """
 
     interjection_name = add_interjection(graph_module, interjection)
@@ -228,14 +241,16 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
 def interject_by_module_class(model: nn.Module,
                               target_module_class: Type[nn.Module],
                               interjection: Interjection) -> DualGraphModule:
-    """
-    Adds an interjection to all nodes that represent a particular nn.Module
+    """Adds an interjection to all nodes that represent a particular nn.Module
     within the provided model.
 
-    :param model: the model to add the interjection(s) to
-    :param target_module_class: the module to match for the insertion point
-    :param interjection: the interjection to insert
-    :return: the interjected model
+    Args:
+        model: the model to add the interjection(s) to
+        target_module_class: the module to match for the insertion point
+        interjection: the interjection to insert
+
+    Returns:
+        the interjected model
     """
 
     selector = matches_module_class(target_module_class)
@@ -244,13 +259,15 @@ def interject_by_module_class(model: nn.Module,
 
 def interject_by_match(model: nn.Module, selector: NodeSelector,
                        interjection: Interjection) -> DualGraphModule:
-    """
-    Adds an interjection to all nodes that represent a particular nn.Module
+    """Adds an interjection to all nodes that represent a particular nn.Module
 
-    :param model: the model
-    :param selector: node selector
-    :param interjection: the interjection
-    :return: the interjected model
+    Args:
+        model: the model
+        selector: node selector
+        interjection: the interjection
+
+    Returns:
+        the interjected model
     """
     is_training = model.training
 

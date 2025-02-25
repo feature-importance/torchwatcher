@@ -48,8 +48,8 @@ class LinearProbe(Analyzer):
             # ones you want into the ctor as arguments
             acc = (predictions.argmax(1) == targets).float().mean()
             count = targets.numel()
-            if working_results is not None and isinstance(working_results,
-                                                          dict):
+            if (working_results is not None and
+                    isinstance(working_results, dict)):
                 old_acc = working_results['acc']
                 new_acc = old_acc * working_results['count'] + acc * count
                 working_results['acc'] = new_acc
@@ -66,5 +66,3 @@ class LinearProbe(Analyzer):
             loss.backward()
             optimizer.step()
 
-    def finalise_result(self, result) -> dict:
-        return self.working_results

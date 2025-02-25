@@ -1,9 +1,9 @@
 import torch
 
-from torchwatcher.analysis.analysis import Analyzer
+from src.torchwatcher.analysis.analysis import Analyzer
 
 
-class DeadReLU(Analyzer):
+class DeadReLU(Analyzer[torch.Tensor]):
     def process_batch_state(self, name, state, working_results):
         x = state.outputs
 
@@ -15,7 +15,7 @@ class DeadReLU(Analyzer):
 
         return working_results
 
-    def finalise_result(self, result) -> dict:
+    def finalise_result(self, name, result) -> dict:
         return {
             'dead_count': result.numel() - result.sum(),
             'numel': result.numel(),

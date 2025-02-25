@@ -1,4 +1,4 @@
-# torchwatcher
+# TorchWatcher
 
 `torchwatcher` uses `torch.fx` to trace and manipulate compute graphs of 
 `PyTorch` models. Primarily, it has two purposes: modifying the forward and/or 
@@ -27,7 +27,7 @@ calling an arbitrary method, etc.
 - easily select node(s) in the graph where you want to place interjection 
 - insert interjection either after each desired node, or, by wrapping the 
   desired node. The latter allows access to both the forward and backward 
-  passes on the nodes, whilst the former only lets you access each nodes 
+  passes on the nodes, whilst the former only lets you access each node's 
   forward output.
 - construct a new model that will run the interjection automatically on each 
   batch when you call it (and train it).
@@ -96,13 +96,13 @@ computational graph. The wrapper can access both the input to the wrapped
 node and its outputs. Taking the previous example, if a wrapped interjection 
 is placed around `node_2`, the graph is transformed to
 
-           ↓
-         node_1
-           ↓
-         my_interjection(node_2)
-           ↓
-         node_3
-           ↓
+               ↓
+             node_1
+               ↓
+    my_interjection(node_2)
+               ↓
+             node_3
+               ↓
 
 where internally `my_interjection` passes the output of `node_1` to `node_2` 
 and returns the output of the `node_2` call. The interjection my alter the 
