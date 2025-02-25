@@ -5,10 +5,27 @@ import torch
 from torch import fx
 from torch import nn
 from torchvision.models.feature_extraction import NodePathTracer, \
-    _set_default_tracer_kwargs, DualGraphModule
+    _set_default_tracer_kwargs
 
 from .interjection import Interjection
 from .node_selector import NodeSelector, matches_module_class
+
+
+class DualGraphModule(nn.Module):
+    def __init__(self, train_module: nn.Module, eval_module: nn.Module,
+                 class_name="DualGraphModule"):
+        super().__init__()
+
+        self.__class__.__name__ = class_name
+
+        self.train_module = train_module
+        self.eval_module = eval_module
+
+    def forward(self, *args, **kwargs):
+        if self.training:
+            return self.train_module(*args, **kwargs)
+        else:
+            return self.eval_module(*args, **kwargs)
 
 
 def _get_name(model: Union[torch.nn.Module, Callable[..., Any]]) -> str:
@@ -272,6 +289,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
     is_training = model.training
 
     graphs = {}
+    graphmodules = {}
     for mode in ["train", "eval"]:
         if mode == "train":
             model.train()
@@ -285,17 +303,20 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
 
         traced.recompile()
         graphs[mode] = traced.graph
+        graphmodules[mode] = traced
 
+    for mode in ["train", "eval"]:
         # inserting the interjections will have added modules to the traced
         # GraphModule, but not the underlying model. We copy those added modules
         # over.
+        # We do this in a separate
         model_modules = dict(model.named_modules())
         for name, module in traced.named_children():
             if name not in model_modules:
                 model.add_module(name, module)
 
     # Build the final graph module
-    graph_module = DualGraphModule(model, graphs["train"], graphs["eval"],
+    graph_module = DualGraphModule(graphmodules["train"], graphmodules["eval"],
                                    class_name=_get_name(model))
 
     # Restore original training mode

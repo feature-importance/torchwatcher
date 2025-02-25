@@ -477,7 +477,7 @@ class Linear(MultiNodeSelector, Enum):
     is_identity = [
         getattr(torch.nn, "Identity", None)
     ]
-    is__linear_ = [
+    is_linear_not_bilinear = [
         getattr(torch.nn, "Linear", None),
         getattr(torch.nn, "LazyLinear", None),
         getattr(torch.nn.functional, "linear", None)
