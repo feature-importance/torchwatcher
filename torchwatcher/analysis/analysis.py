@@ -189,13 +189,12 @@ class Analyzer(WrappedForwardInterjection):
                             working_results: Any | None):
         pass
 
-    @abc.abstractmethod
-    def result_to_dict(self, result) -> dict:
-        pass
+    def finalise_result(self, result) -> dict:
+        return result
 
     def to_dict(self) -> dict:
         return {
-            k: self.result_to_dict(v)
+            k: self.finalise_result(v)
             for k, v in self.working_results.items()
         }
 
@@ -225,9 +224,6 @@ class AnalyzerList(Analyzer):
                             name: str,
                             state: AnalyzerState,
                             working_results: Any | None):
-        pass
-
-    def result_to_dict(self, result) -> dict:
         pass
 
     def to_dict(self) -> dict:
@@ -281,9 +277,6 @@ class PerClassAnalyzer(Analyzer):
                             name: str,
                             state: AnalyzerState,
                             working_results: Any | None):
-        pass
-
-    def result_to_dict(self, result) -> dict:
         pass
 
     def to_dict(self) -> dict:
@@ -342,6 +335,6 @@ class NameAnalyzer(Analyzer):
     def process_batch_state(self, name, state, result):
         return name
 
-    def result_to_dict(self, result) -> dict:
+    def finalise_result(self, result) -> dict:
         return {'name': result}
 

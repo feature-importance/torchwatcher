@@ -15,7 +15,7 @@ class DeadReLU(Analyzer):
 
         return working_results
 
-    def result_to_dict(self, result) -> dict:
+    def finalise_result(self, result) -> dict:
         return {
             'dead_count': result.numel() - result.sum(),
             'numel': result.numel(),

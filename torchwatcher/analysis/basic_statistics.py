@@ -36,7 +36,7 @@ class FeatureStats(Analyzer):
 
         return working_results
 
-    def result_to_dict(self, result: _FeatureStatistics) -> dict:
+    def finalise_result(self, result: _FeatureStatistics) -> dict:
         rec = dict()
 
         rec['channel_sparsity_mean'] = result.channel_sparsity.mean()
