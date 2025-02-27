@@ -65,11 +65,12 @@ class LinearProbe(Analyzer):
                 working_results.reset(tstate)
 
             working_results.process(tstate)
+
             return working_results
 
-    def finalise_result(self, name: str, result: Metric | Tensor) -> (dict |
-                                                                    Metric |
-                                                                      Tensor):
+    def finalise_result(self,
+                        name: str,
+                        result: Metric | Tensor) -> (dict | Metric | Tensor):
         if isinstance(result, Metric):
             return result.process_final()
         return result
