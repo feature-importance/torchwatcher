@@ -7,4 +7,4 @@ Ditto when we want everything eval~~
 optimisers for each probe etc. )~~
 
 utility methods to facilitate training probes
-
+logging of history when training probes 

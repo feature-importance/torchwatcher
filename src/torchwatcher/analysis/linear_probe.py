@@ -1,7 +1,6 @@
 import copy
 from typing import Any, Callable, List, Union
 
-import torch
 import torchbearer
 from torch import nn, Tensor
 from torch.optim.optimizer import ParamsT, Optimizer
@@ -68,8 +67,12 @@ class LinearProbe(Analyzer):
             working_results.process(tstate)
             return working_results
 
-    def finalise_result(self, name: str, result: Metric) -> dict | Metric:
-        return result.process_final()
+    def finalise_result(self, name: str, result: Metric | Tensor) -> (dict |
+                                                                    Metric |
+                                                                      Tensor):
+        if isinstance(result, Metric):
+            return result.process_final()
+        return result
 
     def train_step(self):
         for name in self.working_results.keys():
