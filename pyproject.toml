@@ -6,9 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "torchwatcher"
 dynamic = ["version"]
 dependencies = [
-    "torch~=2.6.0",
+    "torch>=2.2.0",
     "torchbearer~=0.5.5",
-    "numpy~=2.2.2",
+    "numpy>=1.26.0",
     'model-utilities @ git+ssh://git@github.com/feature-importance/model-utilities.git',
 ]
 requires-python = ">=3.11"

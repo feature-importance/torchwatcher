@@ -87,13 +87,14 @@ for k, v in fs.to_dict().items():
 
 nc = 3
 lp = LinearProbe(nc, partial_optim=partial(torch.optim.Adam, lr=0.0001),
-                 loss_fcn=torch.nn.functional.cross_entropy)
+                 criterion=torch.nn.functional.cross_entropy, metrics=['acc',
+                                                                       'loss'])
 net = resnet18()
 net2 = interject_by_match(net, node_types.Activations.is_relu, lp)
 net2.eval()
 lp.train()
 for i in range(5):
-    targets = torch.randint(0, 3, (10,))
+    targets = torch.randint(0, 3, (10, ))
 
     lp.targets = targets
     net2(torch.rand(10, 3, 224, 224))

@@ -1,20 +1,31 @@
-from typing import Any
+import copy
+from typing import Any, Callable, List, Union
 
 import torch
-from torch import nn
+import torchbearer
+from torch import nn, Tensor
+from torch.optim.optimizer import ParamsT, Optimizer
+from torchbearer import Metric, MetricList
 
 from .analysis import Analyzer, AnalyzerState
 
+DEFAULT_METRICS = ['acc']
 
 class LinearProbe(Analyzer):
-    def __init__(self, num_classes, partial_optim=None, loss_fcn=None):
+    def __init__(self,
+                 num_classes: int,
+                 partial_optim: Callable[[ParamsT], Optimizer] = None,
+                 criterion: Callable|None = None,
+                 metrics: List[Union[str, Metric]] = None):
         super().__init__()
 
         self.num_classes = num_classes
         self.probes = nn.ModuleDict()
         self.optimizers = {}
         self.partial_optim = partial_optim
-        self.loss_fcn = loss_fcn
+        self.criterion = criterion
+        self.metrics = MetricList(metrics if metrics is not None
+                                  else DEFAULT_METRICS)
 
     def register(self, name, module):
         super().register(name, module)
@@ -27,7 +38,7 @@ class LinearProbe(Analyzer):
     def process_batch_state(self,
                             name: str,
                             state: AnalyzerState,
-                            working_results: Any | None):
+                            working_results: Metric | None):
 
         probe_name = f"{name.replace(".", "_")}_probe"
         x = state.outputs.view(state.outputs.shape[0], -1)
@@ -40,29 +51,32 @@ class LinearProbe(Analyzer):
             # itself
             return probe(x.detach())
         else:
-            predictions: torch.Tensor = probe(x)
-            targets: torch.Tensor = state.targets
+            tstate = torchbearer.State()
+            tstate[torchbearer.PREDICTION] = probe(x)
+            tstate[torchbearer.TARGET] = state.targets
+            tstate[torchbearer.CRITERION] = self.criterion
 
-            # compute acc, predictions, etc
-            # TODO: use torchbearer metrics to do this instead, and pass the
-            # ones you want into the ctor as arguments
-            acc = (predictions.argmax(1) == targets).float().mean()
-            count = targets.numel()
-            if (working_results is not None and
-                    isinstance(working_results, dict)):
-                old_acc = working_results['acc']
-                new_acc = old_acc * working_results['count'] + acc * count
-                working_results['acc'] = new_acc
-                working_results['count'] += count
-            else:
-                return {'acc': acc, 'count': count}
+            if self.criterion is not None:
+                tstate[torchbearer.LOSS] = self.criterion(
+                    tstate[torchbearer.PREDICTION],
+                    tstate[torchbearer.TARGET])
+
+            if working_results is None or isinstance(working_results, Tensor):
+                working_results = copy.deepcopy(self.metrics)
+                working_results.reset(tstate)
+
+            working_results.process(tstate)
+            return working_results
+
+    def finalise_result(self, name: str, result: Metric) -> dict | Metric:
+        return result.process_final()
 
     def train_step(self):
         for name in self.working_results.keys():
             optimizer = self.optimizers[name]
             optimizer.zero_grad()
             predictions = self.working_results[name]
-            loss = self.loss_fcn(predictions, self.targets)
+            loss = self.criterion(predictions, self.targets)
             loss.backward()
             optimizer.step()
 

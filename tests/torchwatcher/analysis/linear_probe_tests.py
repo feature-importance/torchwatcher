@@ -21,7 +21,7 @@ class TestLinearProbes(unittest.TestCase):
     def test_linear_probes_untrained(self):
         lp = LinearProbe(1,
                          partial_optim=self.optimizer,
-                         loss_fcn=self.loss)
+                         criterion=self.loss)
 
         net = interject_by_match(self.net, node_types.Activations.is_relu, lp)
 
