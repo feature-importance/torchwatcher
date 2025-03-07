@@ -11,7 +11,7 @@ from src.torchwatcher.interjection import interject_by_match, ForwardInterjectio
     WrappedForwardBackwardInterjection
 from src.torchwatcher.interjection.node_selector import node_types
 from torchwatcher.analysis.analysis import PerClassAnalyzer
-from torchwatcher.analysis.basic_statistics import FeatureStats
+from torchwatcher.analysis.basic_statistics import FeatureStatistics
 from torchwatcher.analysis.dead_relus import DeadReLU
 from torchwatcher.interjection import interject_by_module_class, node_selector
 
@@ -76,7 +76,7 @@ net2(torch.rand(10, 3, 224, 224))
 print(dr.to_dict())
 
 
-fs = PerClassAnalyzer(FeatureStats())
+fs = PerClassAnalyzer(FeatureStatistics())
 net = resnet18()
 net2 = interject_by_match(net, node_types.Activations.is_relu, fs)
 fs.targets = torch.randint(0, 3, (10,))

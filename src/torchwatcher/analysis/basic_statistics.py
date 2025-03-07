@@ -11,8 +11,11 @@ class _FeatureStatistics:
         self.feature_activations = Variance()
 
 
-class FeatureStats(Analyzer[_FeatureStatistics]):
-    """Compute basic statistics of feature maps"""
+class FeatureStatistics(Analyzer[_FeatureStatistics]):
+    """
+    Compute basic statistics of feature maps, including mean and variance of
+    per-feature activations, per-channel activations, and the channel sparsity.
+    """
     def __init__(self):
         super().__init__()
 

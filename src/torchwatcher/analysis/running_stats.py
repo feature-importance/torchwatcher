@@ -1,4 +1,5 @@
-"""http://davidbau.com/archives/2021/12/28/running_statistics_for_pytorch.html
+"""
+http://davidbau.com/archives/2021/12/28/running_statistics_for_pytorch.html
 https://github.com/davidbau/rome/blob/a538ceb35bbefd2f5ed4a15501929b0f78a2a20b/util/runningstats.py
 
 To use a runningstats object,

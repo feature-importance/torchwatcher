@@ -4,6 +4,10 @@ from src.torchwatcher.analysis.analysis import Analyzer
 
 
 class DeadReLU(Analyzer[torch.Tensor]):
+    """
+    Track the number of dead ReLU (or other saturating) activations over
+    batches of data.
+    """
     def process_batch_state(self, name, state, working_results):
         x = state.outputs
 
