@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Self, Tuple, Type
 from torch.fx import GraphModule, Node
 from torch.nn import Module
 
-from src.torchwatcher import utils
+from torchwatcher import utils
 
 IDENTITY_TRUE = utils.true
 IDENTITY_FALSE = utils.false

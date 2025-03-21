@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.utils.hooks import RemovableHandle
 
-from src.torchwatcher.utils import unpack, x_if_xp_is_none
+from torchwatcher.utils import unpack, x_if_xp_is_none
 
 
 class Interjection(nn.Module, metaclass=abc.ABCMeta):

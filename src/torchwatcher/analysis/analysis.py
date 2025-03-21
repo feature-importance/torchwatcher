@@ -5,7 +5,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from src.torchwatcher.interjection import WrappedForwardBackwardInterjection, \
+from torchwatcher.interjection import WrappedForwardBackwardInterjection, \
     WrappedForwardInterjection
 
 

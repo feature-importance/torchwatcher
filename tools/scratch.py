@@ -6,10 +6,10 @@ from torch import nn
 from torchvision.models import resnet18
 from torchvision.models.feature_extraction import get_graph_node_names
 
-from src.torchwatcher.analysis.linear_probe import LinearProbe
-from src.torchwatcher.interjection import interject_by_match, ForwardInterjection, \
+from torchwatcher.analysis.linear_probe import LinearProbe
+from torchwatcher.interjection import interject_by_match, ForwardInterjection, \
     WrappedForwardBackwardInterjection
-from src.torchwatcher.interjection.node_selector import node_types
+from torchwatcher.interjection.node_selector import node_types
 from torchwatcher.analysis.analysis import PerClassAnalyzer
 from torchwatcher.analysis.basic_statistics import FeatureStatistics
 from torchwatcher.analysis.dead_relus import DeadReLU
