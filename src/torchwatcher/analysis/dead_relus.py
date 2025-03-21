@@ -1,7 +1,6 @@
 import torch
 
-from t
-orchwatcher.analysis.analysis import (Analyzer)
+from torchwatcher.analysis.analysis import (Analyzer)
 
 
 class DeadReLU(Analyzer[torch.Tensor]):
