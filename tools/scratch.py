@@ -41,13 +41,12 @@ class MyForwardInterjection(ForwardInterjection):
 class MyWrappedForwardBackwardInterjection(WrappedForwardBackwardInterjection):
     def process(self, name, module, input, output):
         print("forward", name, input.shape)
-        print(dict(module.named_parameters()))
+        # print(dict(module.named_parameters()))
 
     def process_backward(self, name, module, grad_input, grad_output):
         print("backward", name,
               grad_input.shape if grad_input is not None else None)
-        print(dict(module.named_parameters()))
-
+        # print(dict(module.named_parameters()))
 
 
 net = resnet18()

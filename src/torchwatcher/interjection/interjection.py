@@ -99,8 +99,8 @@ class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
         tuple[torch.Tensor] | torch.Tensor | None]:
         pass
 
-    def wrap(self, name: str, module: torch.fx.GraphModule):
-        super().wrap(name, module)
+    def register(self, name: str, module: torch.fx.GraphModule):
+        super().register(name, module)
 
         def hook(_: nn.Module,
                  grad_input: [tuple[torch.Tensor, ...] | torch.Tensor],
