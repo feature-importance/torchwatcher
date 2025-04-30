@@ -156,8 +156,7 @@ class Analyzer[T](WrappedForwardInterjection):
         s._output_gradients = grad_output
         s._output_gradients_set = True
 
-        if not self.gradient:
-            self.finalize_state(s)
+        self.finalize_state(s)
 
     @property
     def targets(self):
