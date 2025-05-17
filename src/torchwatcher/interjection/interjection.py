@@ -64,6 +64,7 @@ class WrappedForwardInterjection(Interjection):
 
     def register(self, name: str, module: torch.fx.GraphModule):
         self._wrapped[name] = module
+        self.add_module(name.replace(".", "_"), module)
 
     @abc.abstractmethod
     def process(self, name: str, module: [None | nn.Module], inputs, outputs):

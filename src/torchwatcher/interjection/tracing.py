@@ -6,6 +6,7 @@ from torch import fx
 from torch import nn
 from torchvision.models.feature_extraction import NodePathTracer, \
     _set_default_tracer_kwargs
+from torchwatcher.interjection.node_selector import node_selector
 
 from .interjection import Interjection
 from .node_selector import NodeSelector, matches_module_class
@@ -301,6 +302,8 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
             if selector.fn((traced, node)):
                 insert_interjection(traced, node, interjection)
 
+        traced.graph.eliminate_dead_code()
+        traced.delete_all_unused_submodules()
         traced.recompile()
         graphs[mode] = traced.graph
         graphmodules[mode] = traced
@@ -326,7 +329,15 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
     return graph_module
 
 
+def interject_by_name(net: nn.Module, name: str,
+                      interjection: Interjection) -> DualGraphModule:
+    return interject_by_match(net,
+                              node_selector.matches_qualified_name(name),
+                              interjection)
+
+
 def trim(network: fx.GraphModule):
     # TODO: implement. This should trim the tail of the graph so that it
-    #  stops after the last interjection
+    #  stops after the last interjection - but only if needed (like when not
+    #  training!)
     pass
