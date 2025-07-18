@@ -106,8 +106,8 @@ class Analyzer[T](WrappedForwardInterjection):
     def __init__(self, gradient=False):
         super().__init__()
 
-        self.current_states: collections.OrderedDict[str, AnalyzerState] = {}
-        self.working_results: collections.OrderedDict[str, Any] = {}
+        self.current_states: dict[str, AnalyzerState] = {}
+        self.working_results: dict[str, Any] = {}
 
         self.gradient = gradient
         # store the ref to the inter in a tuple to stop it being registered
