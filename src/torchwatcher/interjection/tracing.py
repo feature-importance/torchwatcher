@@ -258,7 +258,8 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
 
 def interject_by_module_class(model: nn.Module,
                               target_module_class: Type[nn.Module],
-                              interjection: Interjection) -> DualGraphModule:
+                              interjection: Interjection,
+                              tracer_kwargs: Optional[Dict[str, Any]] = None) -> DualGraphModule:
     """Adds an interjection to all nodes that represent a particular nn.Module
     within the provided model.
 
@@ -266,23 +267,32 @@ def interject_by_module_class(model: nn.Module,
         model: the model to add the interjection(s) to
         target_module_class: the module to match for the insertion point
         interjection: the interjection to insert
+        tracer_kwargs: extra keyword arguments to pass to the tracing module.
+                       The 'leaf_modules' key is particularly useful when you
+                       want to interject a custom module without tracing inside
+                       it.
 
     Returns:
         the interjected model
     """
 
     selector = matches_module_class(target_module_class)
-    return interject_by_match(model, selector, interjection)
+    return interject_by_match(model, selector, interjection, tracer_kwargs=tracer_kwargs)
 
 
 def interject_by_match(model: nn.Module, selector: NodeSelector,
-                       interjection: Interjection) -> DualGraphModule:
+                       interjection: Interjection,
+                       tracer_kwargs: Optional[Dict[str, Any]] = None) -> DualGraphModule:
     """Adds an interjection to all nodes that represent a particular nn.Module
 
     Args:
         model: the model
         selector: node selector
         interjection: the interjection
+        tracer_kwargs: extra keyword arguments to pass to the tracing module.
+                       The 'leaf_modules' key is particularly useful when you
+                       want to interject a custom module without tracing inside
+                       it.
 
     Returns:
         the interjected model
@@ -297,7 +307,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
         elif mode == "eval":
             model.eval()
 
-        traced = symbolic_trace(model)
+        traced = symbolic_trace(model, tracer_kwargs=tracer_kwargs)
         for node in traced.graph.nodes:
             if selector.fn((traced, node)):
                 insert_interjection(traced, node, interjection)
@@ -329,11 +339,26 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
     return graph_module
 
 
-def interject_by_name(net: nn.Module, name: str,
-                      interjection: Interjection) -> DualGraphModule:
-    return interject_by_match(net,
+def interject_by_name(model: nn.Module, name: str,
+                      interjection: Interjection,
+                      tracer_kwargs: Optional[Dict[str, Any]] = None) -> DualGraphModule:
+    """Adds an interjection to the particular named node
+
+    Args:
+        model: the model
+        name: the node name
+        interjection: the interjection
+        tracer_kwargs: extra keyword arguments to pass to the tracing module.
+                       The 'leaf_modules' key is particularly useful when you
+                       want to interject a custom module without tracing inside
+                       it.
+
+    Returns:
+        the interjected model
+    """
+    return interject_by_match(model,
                               node_selector.matches_qualified_name(name),
-                              interjection)
+                              interjection, tracer_kwargs=tracer_kwargs)
 
 
 def trim(network: fx.GraphModule):

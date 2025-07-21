@@ -152,5 +152,6 @@ different type of node in the compute graph was wrapped).
 
 #### Inserting using the node selector API
 
+#### Tracing and setting custom leaf modules
 
 ## High-level APIs: Analysis and logging
