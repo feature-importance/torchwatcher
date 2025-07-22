@@ -1,6 +1,5 @@
 import collections
-from operator import or_ as _or_
-from functools import reduce
+
 
 def x_if_xp_is_none(x, xp):
     """returns x if xp is None, otherwise returns xp"""
@@ -8,7 +7,7 @@ def x_if_xp_is_none(x, xp):
 
 
 def unpack(result):
-    """unpacks a single-item tuple, and returns the input if its not a single
+    """unpacks a single-item tuple, and returns the input if it's not a single
     item tuple
     """
     return result[0] if (isinstance(result, tuple) and
@@ -16,7 +15,7 @@ def unpack(result):
 
 
 def pack(result):
-    """packs an item into a single-item tuple unless its already a tuple"""
+    """packs an item into a single-item tuple unless it's already a tuple"""
     if isinstance(result, collections.abc.Sequence):
         return result
     return (result,)
