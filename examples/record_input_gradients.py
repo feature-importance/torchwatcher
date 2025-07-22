@@ -32,22 +32,22 @@ def _():
     from torch.utils.data import DataLoader
     from torchvision.datasets import CIFAR10
     from model_utilities.models.cifar_resnet import resnet18_3x3, ResNet18_3x3_Weights
-    from torchwatcher.analysis.analysis import Analyzer
 
     model = resnet18_3x3(weights=ResNet18_3x3_Weights.CIFAR10_s0)
 
     data = CIFAR10(root="/Users/jsh2/data", train=False,
                    transform=ResNet18_3x3_Weights.CIFAR10_s0.transforms())
     loader = DataLoader(data, batch_size=8, shuffle=False, num_workers=0)
-    return Analyzer, loader, model
+    return loader, model
 
 
 @app.cell
-def _(Analyzer, model):
+def _(model):
     import torch
     from torch import nn
     from torchwatcher.interjection import interject_by_match, node_selector
     from torchwatcher.nn import GradientIdentity
+    from torchwatcher.analysis.analysis import Analyzer
 
     # Create a class to record gradients 
     class GradTracker(Analyzer):
