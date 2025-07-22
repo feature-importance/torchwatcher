@@ -47,7 +47,6 @@ def _(Analyzer, model):
     import torch
     from torch import nn
     from torchwatcher.interjection import interject_by_match, node_selector
-    import torchwatcher.interjection.tracing
     from torchwatcher.nn import GradientIdentity
 
     # Create a class to record gradients 
