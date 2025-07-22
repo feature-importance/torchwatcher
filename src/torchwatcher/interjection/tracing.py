@@ -10,6 +10,7 @@ from torchwatcher.interjection.node_selector import node_selector
 
 from .interjection import Interjection
 from .node_selector import NodeSelector, matches_module_class
+from ..nn import GradientIdentity
 
 
 class DualGraphModule(nn.Module):
@@ -298,6 +299,12 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
         the interjected model
     """
     is_training = model.training
+
+    if tracer_kwargs is None:
+        tracer_kwargs = {}
+    if 'leaf_modules' not in tracer_kwargs:
+        tracer_kwargs['leaf_modules'] = []
+    tracer_kwargs['leaf_modules'].append(GradientIdentity)
 
     graphs = {}
     graphmodules = {}

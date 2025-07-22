@@ -11,5 +11,6 @@ class GradientIdentity(nn.Identity):
     """
     # noinspection PyMethodMayBeStatic
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x.requires_grad = True
+        if not x.requires_grad:
+            x.requires_grad = True
         return x
