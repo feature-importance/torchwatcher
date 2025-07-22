@@ -120,6 +120,10 @@ class Analyzer[T](WrappedForwardInterjection):
         self._targets = None
         self._targets_set = False
 
+    def reset(self):
+        self.current_states = {}
+        self.working_results = {}
+
     def forward(self, name, *args):
         return self.interjection[0](name, *args)
 
