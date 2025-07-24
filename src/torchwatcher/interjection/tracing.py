@@ -18,7 +18,7 @@ class DualGraphModule(nn.Module):
                  class_name="DualGraphModule"):
         super().__init__()
 
-        self.__class__.__name__ = class_name
+        # self.__class__.__name__ = class_name
 
         self.train_module = train_module
         self.eval_module = eval_module
@@ -62,7 +62,7 @@ def symbolic_trace(model: Union[torch.nn.Module, Callable[..., Any]],
     tracer = NodePathTracer(**tracer_kwargs)
     graph = tracer.trace(model, concrete_args=concrete_args)
 
-    graph_module = fx.GraphModule(tracer.root, graph, _get_name(model))
+    graph_module = fx.GraphModule(tracer.root, graph, "traced_"+_get_name(model))
 
     # We store the qualified names as an extra attribute of each node,
     # allowing a NodeSelector to access
@@ -337,7 +337,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
 
     # Build the final graph module
     graph_module = DualGraphModule(graphmodules["train"], graphmodules["eval"],
-                                   class_name=_get_name(model))
+                                   class_name="DualGraphModule_"+_get_name(model))
 
     # Restore original training mode
     model.train(is_training)

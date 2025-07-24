@@ -82,22 +82,26 @@ class AnalyzerState():
 class FInter(WrappedForwardInterjection):
     def __init__(self, analyzer):
         super().__init__()
-        self._analyzer = analyzer
+        # store the ref to the inter in a tuple to stop it being registered
+        # otherwise we'll have cyclic dependencies
+        self._analyzer = (analyzer,)
 
     def process(self, name, module, inputs, outputs):
-        self._analyzer.log_forward(name, module, inputs, outputs)
+        self._analyzer[0].log_forward(name, module, inputs, outputs)
 
 
 class FBInter(WrappedForwardBackwardInterjection):
     def __init__(self, analyzer):
         super().__init__()
-        self._analyzer = analyzer
+        # store the ref to the inter in a tuple to stop it being registered
+        # otherwise we'll have cyclic dependencies
+        self._analyzer = (analyzer,)
 
     def process(self, name, module, inputs, outputs):
-        self._analyzer.log_forward(name, module, inputs, outputs)
+        self._analyzer[0].log_forward(name, module, inputs, outputs)
 
     def process_backward(self, name, module, grad_input, grad_output):
-        self._analyzer.log_backward(name, module, grad_input, grad_output)
+        self._analyzer[0].log_backward(name, module, grad_input, grad_output)
 
 
 class Analyzer[T](WrappedForwardInterjection):
@@ -110,12 +114,10 @@ class Analyzer[T](WrappedForwardInterjection):
         self.working_results: dict[str, Any] = {}
 
         self.gradient = gradient
-        # store the ref to the inter in a tuple to stop it being registered
-        # otherwise we'll have cyclic dependencies
         if gradient:
-            self.interjection = (FBInter(self),)
+            self.interjection = FBInter(self)
         else:
-            self.interjection = (FInter(self),)
+            self.interjection = FInter(self)
 
         self._targets = None
         self._targets_set = False
@@ -125,19 +127,19 @@ class Analyzer[T](WrappedForwardInterjection):
         self.working_results = {}
 
     def forward(self, name, *args):
-        return self.interjection[0](name, *args)
+        return self.interjection(name, *args)
 
     def register(self,
                  name: str,
                  module: torch.fx.GraphModule):
-        self.interjection[0].register(name, module)
+        self.interjection.register(name, module)
 
     def process(self,
                 name: str,
                 module: None | nn.Module,
                 inputs,
                 outputs):
-        self.interjection[0].process(name, module, inputs, outputs)
+        self.interjection.process(name, module, inputs, outputs)
 
     def log_forward(self, name, module, inputs, outputs):
         s = self.current_states[name] = AnalyzerState()
