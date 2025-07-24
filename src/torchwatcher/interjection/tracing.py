@@ -18,7 +18,7 @@ class DualGraphModule(nn.Module):
                  class_name="DualGraphModule"):
         super().__init__()
 
-        # self.__class__.__name__ = class_name
+        self.__class__.__name__ = class_name
 
         self.train_module = train_module
         self.eval_module = eval_module
