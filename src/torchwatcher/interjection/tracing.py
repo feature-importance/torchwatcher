@@ -329,7 +329,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
         # inserting the interjections will have added modules to the traced
         # GraphModule, but not the underlying model. We copy those added modules
         # over.
-        # We do this in a separate
+        # We do this in a separate loop in case changes to val influence train
         model_modules = dict(model.named_modules())
         for name, module in traced.named_children():
             if name not in model_modules:
