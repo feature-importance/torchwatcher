@@ -45,6 +45,7 @@ class AnalyzerState():
 
         self.extras = dict()
 
+    @property
     def inputs(self):
         return self._inputs
 

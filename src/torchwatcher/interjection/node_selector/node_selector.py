@@ -482,6 +482,31 @@ def matches_module_class(clz: Type[Module]) -> NodeSelector:
     return NodeSelector(lambda n: _is_node_of_module(n, clz))
 
 
+def matches_module_lambda(lam: Callable[[Module], bool]) -> NodeSelector:
+    """A node selector which is true when the provided lambda function returns
+    true given the the node's target module. Any matching node will have a
+    'call_module' op.
+
+    Args:
+        lam: the function to call based on the module.
+
+    Returns:
+        A node selector which returns True if the node's module matches
+    """
+
+    def _matches(
+            # Arguments:
+            nodestate: NodeState,
+            lam: Type[Module]
+    ) -> bool:
+        named_modules = dict(nodestate[0].named_modules())
+        if nodestate[1].op != "call_module":
+            return False
+        return lam(named_modules.get(nodestate[1].target))
+
+    return NodeSelector(lambda n: _matches(n, lam))
+
+
 def _is_node_parametrized(
         # Arguments:
         nodestate: NodeState

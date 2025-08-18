@@ -9,7 +9,7 @@ dependencies = [
     "torch>=2.2.0",
     "torchbearer~=0.5.5",
     "numpy>=1.26.0",
-    'model-utilities @ git+ssh://git@github.com/feature-importance/model-utilities.git',
+    'model-utilities>=0.1.0.dev'
 ]
 requires-python = ">=3.11"
 authors = [
