@@ -316,7 +316,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
 
         traced = symbolic_trace(model, tracer_kwargs=tracer_kwargs)
         for node in traced.graph.nodes:
-            if selector.fn((traced, node)):
+            if selector is not None and selector.fn((traced, node)):
                 insert_interjection(traced, node, interjection)
 
         traced.graph.eliminate_dead_code()
@@ -367,6 +367,21 @@ def interject_by_name(model: nn.Module, name: str,
                               node_selector.matches_qualified_name(name),
                               interjection, tracer_kwargs=tracer_kwargs)
 
+
+def trace(model: nn.Module, tracer_kwargs: Optional[Dict[str, Any]] = None) -> fx.GraphModule:
+    """Trace a model using the same machinary as when adding an interjection.
+
+    Args:
+        model: the model
+        tracer_kwargs: extra keyword arguments to pass to the tracing module.
+                       The 'leaf_modules' key is particularly useful when you
+                       want to interject a custom module without tracing inside
+                       it.
+
+    Returns:
+        the traced model
+    """
+    return interject_by_match(model, None, None, tracer_kwargs=tracer_kwargs)
 
 def trim(network: fx.GraphModule):
     # TODO: implement. This should trim the tail of the graph so that it
