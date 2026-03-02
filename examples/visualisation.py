@@ -103,19 +103,19 @@ def _(draw_graph_pretty, is_activation, mo, nn, torch):
 
     class MyWrappedFwdBwd(WrappedForwardBackwardInterjection):
         def process(self, name, module, inputs, outputs):
-            print(name)
+            pass
 
         def process_backward(self, name, module, grad_input, grad_output):
-            print(name)
+            pass
 
     class MyForwardInterjection(ForwardInterjection):
         def process(self, name: str, module: nn.Module | None, inputs):
-            print(name, inputs.shape)
+            pass
 
 
     model_rn18 = resnet18()
-    interjected_rn18 = interject_by_match(model_rn18, is_activation, MyForwardInterjection())
-    # interjected_rn18 = trace(model_rn18)
+    # interjected_rn18 = interject_by_match(model_rn18, is_activation, MyForwardInterjection())
+    interjected_rn18 = interject_by_match(model_rn18, is_activation, MyWrappedFwdBwd())
     mo.Html(draw_graph_pretty(interjected_rn18, torch.empty(1,3,224,224)).create_svg().decode('utf-8'))
     return
 

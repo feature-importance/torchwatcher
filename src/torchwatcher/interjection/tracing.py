@@ -268,6 +268,7 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
             # new node to represent the call to the interjection
             args = (preferred_name(node), node,)
             new_node = graph_module.graph.call_module(interjection_name, args)
+            new_node.meta['nn_module_stack'] = node.meta['nn_module_stack'].copy()
             # register the extracted node that we wrap
             interjection.register(preferred_name(node), extracted)
             # clean everything up by replacing uses and inputs, then removing
@@ -288,6 +289,7 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
             # create the interjection node after the current one
             new_node = graph_module.graph.call_module(interjection_name,
                                                       (preferred_name(node), node,))
+            new_node.meta['nn_module_stack'] = node.meta['nn_module_stack'].copy()
             # and hook it to the graph
             node.replace_all_uses_with(new_node)
             new_node.replace_input_with(new_node, node)
