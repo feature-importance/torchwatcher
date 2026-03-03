@@ -117,6 +117,12 @@ def _(draw_graph_pretty, is_activation, mo, nn, torch):
     # interjected_rn18 = interject_by_match(model_rn18, is_activation, MyForwardInterjection())
     interjected_rn18 = interject_by_match(model_rn18, is_activation, MyWrappedFwdBwd())
     mo.Html(draw_graph_pretty(interjected_rn18, torch.empty(1,3,224,224)).create_svg().decode('utf-8'))
+    return (interjected_rn18,)
+
+
+@app.cell
+def _(draw_graph_pretty, interjected_rn18, torch):
+    print(draw_graph_pretty(interjected_rn18, torch.empty(1,3,224,224)))
     return
 
 

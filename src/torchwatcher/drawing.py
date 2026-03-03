@@ -7,7 +7,8 @@ import pydot
 import torch
 from torch.fx.passes.graph_drawer import FxGraphDrawer, _WEIGHT_TEMPLATE, _COLOR_MAP, _HASH_COLOR_MAP
 from torch.fx.passes.shape_prop import TensorMetadata
-from torchwatcher.interjection.tracing import DualGraphModule, trace_shapes
+from torchwatcher.interjection.tracing import DualGraphModule, trace_shapes, ShapeProp
+from torchwatcher.interjection import WrappedForwardInterjection, ForwardInterjection
 
 
 def compact_list_repr(x: list[Any]) -> str:
@@ -67,22 +68,94 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
             skip_node_names_in_args: bool,
             parse_stack_trace: bool,
     ) -> pydot.Dot:
-        dot_graph = pydot.Dot(name, rankdir="TB")
+        dot_graph = pydot.Dot(name, rankdir="TB", compound='true')
 
         sub_name_to_subgraph = {}
 
+        dot_graph = self._to_dot_recursive(graph_module, name, dot_graph,
+                                           sub_name_to_subgraph, ignore_getattr,
+                                           ignore_parameters_and_buffers,
+                                           skip_node_names_in_args, parse_stack_trace)
+
+        return dot_graph
+
+    def _to_dot_recursive(
+            self,
+            graph_module: torch.fx.GraphModule,
+            name: str,
+            dot_graph: pydot.Graph,
+            sub_name_to_subgraph: dict[str, pydot.Cluster],
+            ignore_getattr: bool,
+            ignore_parameters_and_buffers: bool,
+            skip_node_names_in_args: bool,
+            parse_stack_trace: bool,
+            ignore_input=False,
+            ignore_output=False,
+    ) -> pydot.Dot:
+        wrapped_nodes = set()
         for node in graph_module.graph.nodes:
+            if ignore_input and node.op == "placeholder":
+                continue
+            if ignore_output and node.op == "output":
+                continue
             if ignore_getattr and node.op == "get_attr":
                 continue
 
             style = self._get_node_style(node)
-            dot_node = pydot.Node(
-                node.name,
-                label=self._get_node_label(
-                    graph_module, node, skip_node_names_in_args, parse_stack_trace
-                ),
-                **style,  # type: ignore[arg-type]
-            )
+            isWrapped = False
+            md = None
+            if node.op == "call_module":
+                md = dict(graph_module.named_modules())[node.target]
+                if isinstance(md, ForwardInterjection):
+                    style['fillcolor'] = 'MistyRose1'
+                    style['shape'] = 'box'
+                    style['margin'] = '0.05'
+                if isinstance(md, WrappedForwardInterjection):
+                    isWrapped = True
+
+            if isWrapped:
+                dot_node = pydot.Cluster(
+                    name + "/" + node.name,
+                    # label=node.name,
+                    label=self._get_node_label(
+                        graph_module, node, skip_node_names_in_args, parse_stack_trace
+                    ),
+                    fillcolor='MistyRose1',
+                    penwidth= "1",
+                    style= "solid,filled",
+                    labeljust="l",
+                    fontsize="10"
+                )
+                dot_node.add_node(pydot.Node(name + "/" + node.name, style='invis', label="", width=0, height=0, margin=0))
+                gm = md._wrapped[node.args[0]]
+
+                wrapped_nodes.add(node)
+
+                ShapeProp(gm).propagate(torch.empty(node.meta['tensor_meta'].shape))
+                for n in gm.graph.nodes:
+                    if n.op != 'placeholder' and n.op != 'output':
+                        dot_node.add_node(pydot.Node(name + "/" + node.name+"/"+n.name,
+                                                     label=self._get_node_label(
+                                                         gm, n, skip_node_names_in_args, parse_stack_trace
+                                                     ),
+                                                     **style
+                                                     )
+                                          )
+                # #TODO: multiple inputs?
+
+                # self._to_dot_recursive(gm, name + "/" + node.name, dot_node,
+                #                        sub_name_to_subgraph, ignore_getattr,
+                #                        ignore_parameters_and_buffers,
+                #                        skip_node_names_in_args, parse_stack_trace, True, True)
+
+            else:
+                dot_node = pydot.Node(
+                    name + "/" + node.name,
+                    label=self._get_node_label(
+                        graph_module, node, skip_node_names_in_args, parse_stack_trace
+                    ),
+                    **style
+                )
 
             current_graph = dot_graph
 
@@ -96,12 +169,16 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
                 for sub_name, sub_clz in sub_meta:
                     if sub_name not in sub_name_to_subgraph:
                         sub_name_to_subgraph[sub_name] = pydot.Cluster(
-                            sub_name, label=sub_clz.__name__
+                            name + "/" + sub_name, label=sub_clz.__name__
                         )
                         current_graph.add_subgraph(sub_name_to_subgraph[sub_name])
                     current_graph = sub_name_to_subgraph[sub_name]
 
-            current_graph.add_node(dot_node)
+            if isWrapped:
+                # dot_node.add_node(pydot.Node(node.name, label=node.name))
+                current_graph.add_subgraph(dot_node)
+            else:
+                current_graph.add_node(dot_node)
 
             def get_module_params_or_buffers():
                 for pname, ptensor in chain(
@@ -114,9 +191,9 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
                         else "buffer" + r"\l"
                     )
                     dot_w_node = pydot.Node(
-                        pname1,
+                        name + "/" + pname1,
                         label="{" + label1 + self._get_tensor_label(ptensor) + "}",
-                        **_WEIGHT_TEMPLATE,  # type: ignore[arg-type]
+                        **_WEIGHT_TEMPLATE,
                     )
                     current_graph.add_node(dot_w_node)
                     current_graph.add_edge(pydot.Edge(pname1, node.name))
@@ -136,11 +213,24 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
             subgraph.set("fontsize", "10")
 
         for node in graph_module.graph.nodes:
+            if ignore_input and node.op == "placeholder":
+                continue
+            if ignore_output and node.op == "output":
+                continue
             if ignore_getattr and node.op == "get_attr":
                 continue
 
             for user in node.users:
-                dot_graph.add_edge(pydot.Edge(node.name, user.name))
+                if ignore_output and user.op == "output":
+                    continue
+
+                obj_dict = {}
+                if node in wrapped_nodes:
+                    obj_dict['ltail'] = 'cluster_' + name + "/" + node.name
+                if user in wrapped_nodes:
+                    obj_dict['lhead'] = 'cluster_' + name + "/" + user.name
+
+                dot_graph.add_edge(pydot.Edge(name + "/" + node.name, name + "/" + user.name, **obj_dict))
 
         return dot_graph
 
