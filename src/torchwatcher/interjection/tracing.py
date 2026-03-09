@@ -4,10 +4,12 @@ from typing import Type, Optional, Dict, Any, List, Union, Callable
 import torch
 from torch import fx
 from torch import nn
+from torch.fx.passes.shape_prop import ShapeProp
+from torch.fx.proxy import Scope, ScopeContextManager
 from torchvision.models.feature_extraction import NodePathTracer, \
     _set_default_tracer_kwargs
-from torchwatcher.interjection.node_selector import node_selector
 
+from torchwatcher.interjection.node_selector import node_selector
 from .interjection import Interjection
 from .node_selector import NodeSelector, matches_module_class
 from ..nn import GradientIdentity
@@ -22,6 +24,13 @@ class DualGraphModule(nn.Module):
 
         self.train_module = train_module
         self.eval_module = eval_module
+
+    @property
+    def graphmodule(self):
+        if self.training:
+            return self.train_module
+        else:
+            return self.eval_module
 
     def forward(self, *args, **kwargs):
         if self.training:
@@ -45,12 +54,38 @@ def _get_name(model: Union[torch.nn.Module, Callable[..., Any]]) -> str:
         return model.__name__
 
 
+class HierarchyTracer(NodePathTracer):
+    def call_module(self, m, forward, args, kwargs):
+        module_qualified_name = self.path_of_module(m)
+        with ScopeContextManager(
+                self.scope, Scope(module_qualified_name, type(m))
+        ) as _scope:
+            # module_stack is an ordered dict so writing then deleting the
+            # entry is equivalent to push/pop on a list
+            num_calls = self.num_calls.get(module_qualified_name, 0)
+            module_key = (
+                f"{_scope.module_path}@{num_calls}"
+                if num_calls > 0
+                else _scope.module_path
+            )
+            self.module_stack[module_key] = (module_qualified_name, _scope.module_type)
+
+        node = super().call_module(m, forward, args, kwargs)
+
+        # node.node.meta['nn_module_stack'] = self.module_stack.copy()
+        self.module_stack.pop(module_key)
+        return node
+
+
 def symbolic_trace(model: Union[torch.nn.Module, Callable[..., Any]],
                    tracer_kwargs: Optional[Dict[str, Any]] = None,
-                   concrete_args: Optional[Dict[str, Any]] = None
+                   concrete_args: Optional[Dict[str, Any]] = None,
+                   prefix: str = "",
                    ) -> fx.GraphModule:
     """Custom symbolic tracing using functionality in torchvision's feature
     extraction framework.
+
+    Rather than flattening the model we keep the hierarchy intact by recursively tracing each child submodule.
 
     Args:
         model: the model to trace
@@ -59,10 +94,11 @@ def symbolic_trace(model: Union[torch.nn.Module, Callable[..., Any]],
     """
     # Instantiate our NodePathTracer and use that to trace the model
     tracer_kwargs = _set_default_tracer_kwargs(tracer_kwargs)
-    tracer = NodePathTracer(**tracer_kwargs)
+    tracer = HierarchyTracer(**tracer_kwargs)
+    # tracer = NodePathTracer(**tracer_kwargs)
     graph = tracer.trace(model, concrete_args=concrete_args)
 
-    graph_module = fx.GraphModule(tracer.root, graph, "traced_"+_get_name(model))
+    graph_module = fx.GraphModule(tracer.root, graph, prefix + _get_name(model))
 
     # We store the qualified names as an extra attribute of each node,
     # allowing a NodeSelector to access
@@ -232,6 +268,7 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
             # new node to represent the call to the interjection
             args = (preferred_name(node), node,)
             new_node = graph_module.graph.call_module(interjection_name, args)
+            new_node.meta['nn_module_stack'] = node.meta['nn_module_stack'].copy()
             # register the extracted node that we wrap
             interjection.register(preferred_name(node), extracted)
             # clean everything up by replacing uses and inputs, then removing
@@ -252,6 +289,7 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
             # create the interjection node after the current one
             new_node = graph_module.graph.call_module(interjection_name,
                                                       (preferred_name(node), node,))
+            new_node.meta['nn_module_stack'] = node.meta['nn_module_stack'].copy()
             # and hook it to the graph
             node.replace_all_uses_with(new_node)
             new_node.replace_input_with(new_node, node)
@@ -316,7 +354,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
 
         traced = symbolic_trace(model, tracer_kwargs=tracer_kwargs)
         for node in traced.graph.nodes:
-            if selector.fn((traced, node)):
+            if selector is not None and selector.fn((traced, node)):
                 insert_interjection(traced, node, interjection)
 
         traced.graph.eliminate_dead_code()
@@ -337,7 +375,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
 
     # Build the final graph module
     graph_module = DualGraphModule(graphmodules["train"], graphmodules["eval"],
-                                   class_name="DualGraphModule_"+_get_name(model))
+                                   class_name="DualGraphModule_" + _get_name(model))
 
     # Restore original training mode
     model.train(is_training)
@@ -366,6 +404,33 @@ def interject_by_name(model: nn.Module, name: str,
     return interject_by_match(model,
                               node_selector.matches_qualified_name(name),
                               interjection, tracer_kwargs=tracer_kwargs)
+
+
+def trace(model: nn.Module, tracer_kwargs: Optional[Dict[str, Any]] = None) -> DualGraphModule:
+    """Trace a model using the same machinary as when adding an interjection.
+
+    Args:
+        model: the model
+        tracer_kwargs: extra keyword arguments to pass to the tracing module.
+                       The 'leaf_modules' key is particularly useful when you
+                       want to interject a custom module without tracing inside
+                       it.
+
+    Returns:
+        the traced model
+    """
+    return interject_by_match(model, None, None, tracer_kwargs=tracer_kwargs)
+
+
+def trace_shapes(model: DualGraphModule, *args):
+    """Trace the shapes of the inputs and outputs of a traced or interjected model."""
+    # TODO: deal with multiple inputs and non-tensor types
+    from torch._subclasses.fake_tensor import FakeTensorMode
+    torch._functorch.config.fake_tensor_prefer_device_type = 'meta'
+
+    with FakeTensorMode(allow_non_fake_inputs=True):
+        ShapeProp(model.train_module).propagate(*args)
+        ShapeProp(model.eval_module).propagate(*args)
 
 
 def trim(network: fx.GraphModule):

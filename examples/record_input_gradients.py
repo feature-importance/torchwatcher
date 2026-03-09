@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.14.11"
+__generated_with = "0.17.8"
 app = marimo.App(width="medium")
 
 
@@ -12,16 +12,14 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     # Recording input gradients
 
     This notebook shows how to capture input gradient maps with an interjection. Whilst there is slightly more
-    code than if you were to do this manually (e.g. setting `requires_grad=True` on the input, etc - see below), the nice thing is that 
-    you can trivially change this to interject the gradients at any point(s) of the network; this would be very difficult 
+    code than if you were to do this manually (e.g. setting `requires_grad=True` on the input, etc - see below), the nice thing is that
+    you can trivially change this to interject the gradients at any point(s) of the network; this would be very difficult
     to do manually!
-    """
-    )
+    """)
     return
 
 
@@ -96,7 +94,9 @@ def _(gt, loader, model2, torch):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""If you wanted to simply capture input gradients manually without torchwatcher you could do:""")
+    mo.md(r"""
+    If you wanted to simply capture input gradients manually without torchwatcher you could do:
+    """)
     return
 
 
@@ -121,7 +121,9 @@ def _(gt, loader, model, torch):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""Or by using `torch.autograd.grad` directly:""")
+    mo.md(r"""
+    Or by using `torch.autograd.grad` directly:
+    """)
     return
 
 
@@ -132,7 +134,7 @@ def _(gt, loader, model, torch):
     for _X, _y in loader:
         _X.requires_grad = True
         _pred = model(_X).max(dim=1)[0]
-    
+
         _grads.append(torch.autograd.grad(_pred, _X, grad_outputs=torch.ones(_pred.shape[0]), create_graph=True)[0])
         break
 
