@@ -1,6 +1,9 @@
+import copy
 import torch.nn as nn
+
 from torch.fx import GraphModule
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, Type
+
 from .node_selector import NodeSelector
 from ..nn import GradientIdentity
 from .tracing import symbolic_trace, DualGraphModule, _get_name
@@ -105,3 +108,54 @@ def replace(model: nn.Module, selector: NodeSelector,
     graph_module.train(is_training)
 
     return graph_module
+
+
+def replace_module_native(model, target_class: Type[nn.Module],
+                          create_replacement: Callable[[nn.Module], nn.Module],
+                          clone=True) -> nn.Module:
+    """
+    Recursively replaces all instances of target_class with a new module
+    created by replacement_factory.
+
+    Args:
+        model (nn.Module): The model to modify.
+        target_class (type): The class type to look for (e.g., nn.ReLU).
+        create_replacement (callable): A function/lambda that returns
+                                       a new instance of the replacement module.
+        clone: If True, a deep copy of the model is made before modifying.
+
+    Returns:
+        model with replacements made.
+    """
+    if clone:
+        model = copy.deepcopy(model)
+
+    # We convert to a list and reverse it to perform a bottom-up replacement.
+    # This prevents issues where replacing a parent module makes its
+    # children unreachable during iteration.
+    modules = list(model.named_modules())
+
+    for name, module in reversed(modules):
+        if isinstance(module, target_class):
+            # Identify the parent and the attribute name
+            if name == "":
+                # This is the root model itself
+                # Replacing the root is tricky; we can't setattr 'self'
+                # easily within this loop, but we can replace its components.
+                continue
+
+            # Split the name into path and the final attribute name
+            # e.g., 'features.0.conv' -> ['features', '0'], 'conv'
+            parts = name.split('.')
+            attr_name = parts[-1]
+
+            # Traverse to the parent module
+            parent = model
+            for part in parts[:-1]:
+                parent = getattr(parent, part)
+
+            # Replace the module
+            new_module = create_replacement(module)
+            setattr(parent, attr_name, new_module)
+
+    return model

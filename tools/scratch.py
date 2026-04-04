@@ -14,6 +14,7 @@ from torchwatcher.analysis.analysis import PerClassAnalyzer
 from torchwatcher.analysis.basic_statistics import FeatureStatistics
 from torchwatcher.analysis.dead_relus import DeadReLU
 from torchwatcher.interjection import interject_by_module_class, node_selector
+from torchwatcher.interjection.tracing import interject_by_module_class_native
 
 
 class MyForwardInterjection(ForwardInterjection):
@@ -52,10 +53,19 @@ class MyWrappedForwardBackwardInterjection(WrappedForwardBackwardInterjection):
 net = resnet18()
 net2 = interject_by_module_class(net, nn.Conv2d,
                                  MyWrappedForwardBackwardInterjection())
-r = net2(torch.zeros(1, 3, 224, 244))
+r = net2(torch.zeros(1, 3, 224, 244, requires_grad=True))
 loss = torch.nn.functional.cross_entropy(r, torch.tensor([0],
 dtype=torch.long))
 loss.backward()
+
+net = resnet18()
+net2 = interject_by_module_class_native(net, nn.Conv2d, MyWrappedForwardBackwardInterjection())
+r = net2(torch.zeros(1, 3, 224, 244, requires_grad=True))
+loss = torch.nn.functional.cross_entropy(r, torch.tensor([0],
+dtype=torch.long))
+loss.backward()
+
+
 
 net = resnet18()
 print(get_graph_node_names(net))

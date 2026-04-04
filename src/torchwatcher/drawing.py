@@ -7,6 +7,7 @@ import pydot
 import torch
 from torch.fx.passes.graph_drawer import FxGraphDrawer, _WEIGHT_TEMPLATE, _COLOR_MAP, _HASH_COLOR_MAP
 from torch.fx.passes.shape_prop import TensorMetadata
+from torchwatcher.analysis import Analyzer
 from torchwatcher.interjection.tracing import DualGraphModule, trace_shapes, ShapeProp
 from torchwatcher.interjection import WrappedForwardInterjection, ForwardInterjection
 
@@ -127,7 +128,10 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
                     fontsize="10"
                 )
                 dot_node.add_node(pydot.Node(name + "/" + node.name, style='invis', label="", width=0, height=0, margin=0))
-                gm = md._wrapped[node.args[0]]
+                if isinstance(md, Analyzer):
+                    gm = md.interjection._wrapped[node.args[0]]
+                else:
+                    gm = md._wrapped[node.args[0]]
 
                 wrapped_nodes.add(node)
 

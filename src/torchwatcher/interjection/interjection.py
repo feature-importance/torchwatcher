@@ -9,7 +9,7 @@ from torchwatcher.utils import unpack, x_if_xp_is_none
 
 class Interjection(nn.Module, metaclass=abc.ABCMeta):
     """Base class for all interjection types."""
-    def register(self, name: str, node: torch.fx.GraphModule | None):
+    def register(self, name: str, node: torch.fx.GraphModule | nn.Module | None):
         """Called when an interjection is added to the graph. Subclasses can
         override if they need to perform actions before the forward method
         and subsequent process methods are called.
@@ -28,7 +28,7 @@ class ForwardInterjection(Interjection):
         super().__init__()
         self._prev_node: dict[str, torch.fx.GraphModule | None] = {}
 
-    def register(self, name: str, node: torch.fx.GraphModule | None):
+    def register(self, name: str, node: torch.fx.GraphModule | nn.Module | None):
         self._prev_node[name] = node
 
     @abc.abstractmethod
@@ -62,7 +62,7 @@ class WrappedForwardInterjection(Interjection):
         super().__init__()
         self._wrapped: dict[str, torch.fx.GraphModule] = {}
 
-    def register(self, name: str, module: torch.fx.GraphModule):
+    def register(self, name: str, module: torch.fx.GraphModule | nn.Module):
         self._wrapped[name] = module
         self.add_module(name.replace(".", "_"), module)
 
@@ -100,7 +100,7 @@ class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
         tuple[torch.Tensor] | torch.Tensor | None]:
         pass
 
-    def register(self, name: str, module: torch.fx.GraphModule):
+    def register(self, name: str, module: torch.fx.GraphModule | nn.Module):
         super().register(name, module)
 
         def hook(_: nn.Module,

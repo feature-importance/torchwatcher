@@ -154,4 +154,25 @@ different type of node in the compute graph was wrapped).
 
 #### Tracing and setting custom leaf modules
 
+#### Native Interjections
+
+Native interjections are interjections that are inserted into a model without using the `torch.fx` tracing API.
+This is not as powerful as the tracing API because you can only interject on modules themselves, not arbitrary nodes. 
+However, this is often more convenient than tracing when you want to interject on a module. A common use case would be 
+to interject on a "block" within a module (for example a Resnet block, or a convolutional layer when you know the 
+functional api is not being used). They are inserted by calling the `interject_by_module_class_native` function. 
+Internally wrappers are created to graft the interjection onto the model; from the user perspective usage of the 
+interjection is identical to those inserted using the `torch.fx` API.
+
+## Rewriting the graph
+
+In addition to interjections, `torchwatcher` also allows you to rewrite the compute graph. This is useful for things 
+like changing a model dynamically: for example, you could replace all instances of an `nn.Conv2d` with a  different
+module (for example a quantised version of the same module). Replacement is done through the use of a user-provided 
+callback function that is given a node in the graph and returns a new node.
+
+`replace_module`: 1-to-1 replacement of a module in the graph, using the `torch.fx` tracing API to identify modules.
+
+`replace_module_native`: 1-to-1 replacement of all modules in the model that match a given class.
+
 ## High-level APIs: Analysis and logging

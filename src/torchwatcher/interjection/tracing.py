@@ -10,7 +10,7 @@ from torchvision.models.feature_extraction import NodePathTracer, \
     _set_default_tracer_kwargs
 
 from torchwatcher.interjection.node_selector import node_selector
-from .interjection import Interjection
+from .interjection import Interjection, ForwardInterjection
 from .node_selector import NodeSelector, matches_module_class
 from ..nn import GradientIdentity
 
@@ -302,6 +302,11 @@ def interject_by_module_class(model: nn.Module,
     """Adds an interjection to all nodes that represent a particular nn.Module
     within the provided model.
 
+    To make this work, we make the target module a leaf module in the tracer. This might cause problems if you also
+    wanted to interject things inside the target module. Please file a feature request if you need this functionality.
+    (Note to self: could be handled by recursively tracing, but we wwould probably need to look at the order in which
+    things happen)
+
     Args:
         model: the model to add the interjection(s) to
         target_module_class: the module to match for the insertion point
@@ -314,6 +319,12 @@ def interject_by_module_class(model: nn.Module,
     Returns:
         the interjected model
     """
+
+    if tracer_kwargs is None:
+        tracer_kwargs = {}
+    if 'leaf_modules' not in tracer_kwargs:
+        tracer_kwargs['leaf_modules'] = []
+    tracer_kwargs['leaf_modules'].append(target_module_class)
 
     selector = matches_module_class(target_module_class)
     return interject_by_match(model, selector, interjection, tracer_kwargs=tracer_kwargs)
@@ -438,3 +449,57 @@ def trim(network: fx.GraphModule):
     #  stops after the last interjection - but only if needed (like when not
     #  training!)
     pass
+
+def interject_by_module_class_native(model: nn.Module,
+                                     target_module_class: Type[nn.Module],
+                                     interjection: Interjection,
+                                     clone=True,
+                                     ) -> nn.Module:
+    """Adds an interjection to all nodes that represent a particular nn.Module
+    within the provided model. We do this natively, without tracing. Because we're not
+    computing the graph we always wrap the target module (so even a ForwardInterjection
+    will be wrapped).
+
+    Args:
+        model: the model to add the interjection(s) to
+        target_module_class: the module to match for the insertion point
+        interjection: the interjection to insert
+        clone: whether to clone the model before interjecting (default True)
+
+    Returns:
+        the interjected model
+    """
+    if clone:
+        model = copy.deepcopy(model)
+
+    if isinstance(interjection, ForwardInterjection):
+        class _Wrapped(WrappedForwardInterjection):
+            def __init__(self, inter: Interjection):
+                super().__init__(wrapped_module)
+                self.inter = inter
+
+            def process(self, name: str, module: [None | nn.Module], inputs, outputs):
+                self.inter.process(name, module, inputs, outputs)
+
+            def register(self, name: str, module: [None | nn.Module]):
+                super().register(name, module)
+                self.inter.register(name, module)
+
+        interjection = _Wrapped(interjection)
+
+    module_names = {v: k for k, v in model.named_modules()}
+    def add_interjection(module):
+        name = module_names[module]
+
+        class _NameWrapper(nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, *args, **kwargs):
+                return interjection.forward(name, *args, **kwargs)
+
+        interjection.register(name, module)
+        return _NameWrapper()
+
+    from .rewriting import  replace_module_native
+    return replace_module_native(model, target_module_class, add_interjection, clone=False)
