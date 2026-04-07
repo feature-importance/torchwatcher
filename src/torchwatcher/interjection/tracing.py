@@ -494,6 +494,11 @@ def interject_by_module_class_native(model: nn.Module,
         class _NameWrapper(nn.Module):
             def __init__(self):
                 super().__init__()
+                if "." in name:
+                    _, nm = name.rsplit(".", 1)
+                else:
+                    nm = name
+                self.add_module(nm, module)
 
             def forward(self, *args, **kwargs):
                 return interjection.forward(name, *args, **kwargs)
@@ -501,5 +506,5 @@ def interject_by_module_class_native(model: nn.Module,
         interjection.register(name, module)
         return _NameWrapper()
 
-    from .rewriting import  replace_module_native
+    from .rewriting import replace_module_native
     return replace_module_native(model, target_module_class, add_interjection, clone=False)
