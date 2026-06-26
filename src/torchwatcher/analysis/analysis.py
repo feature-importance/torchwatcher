@@ -123,6 +123,8 @@ class Analyzer[T](WrappedForwardInterjection):
         self._targets = None
         self._targets_set = False
 
+        self.enabled = True  # allow Analyzer to be disabled
+
     def reset(self):
         self.current_states = {}
         self.working_results = {}
@@ -177,6 +179,10 @@ class Analyzer[T](WrappedForwardInterjection):
         self._targets_set = True
 
     def finalize_state(self, state: AnalyzerState):
+        # only if enabled do the updates
+        if not self.enabled:
+            return
+
         name = state.name
         del self.current_states[name]
 
@@ -245,6 +251,11 @@ class AnalyzerList(Analyzer[Any]):
                 result[f"{clz}.{k}"] = v
 
         return result
+
+    def register(self, name, module):
+        super().register(name, module)
+        for analyzer in self.analyzers:
+            analyzer.register(name, module)
 
 
 class PerClassAnalyzer(Analyzer[Any]):

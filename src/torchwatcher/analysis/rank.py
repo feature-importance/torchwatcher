@@ -105,11 +105,12 @@ class RankAnalyzer(Analyzer):
 
         features = state.outputs
 
+        f = features.view(features.shape[0], -1)
         if not name in self.indices:
-            self.features_dim[name] = features.shape[1]
-            self.indices[name] = torch.randperm(features.shape[1])[:self.n]
+            self.features_dim[name] = f.shape[1]
+            self.indices[name] = torch.randperm(f.shape[1])[:self.n]
 
-        f = features.view(features.shape[0], -1)[:, self.indices]
+        f = f[:, self.indices[name]]
         working_results.add(f)
 
         return working_results
@@ -122,7 +123,7 @@ class RankAnalyzer(Analyzer):
 
             rec = dict()
             rec['features_rank'] = rank
-            rec['features_dim'] = self.features_dim
+            rec['features_dim'] = self.features_dim[name]
 
             norm = min(self.features_dim[name], covar.shape[0])
             rec['normalized_features_rank'] = rank / norm
