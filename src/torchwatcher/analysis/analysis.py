@@ -123,7 +123,15 @@ class Analyzer[T](WrappedForwardInterjection):
         self._targets = None
         self._targets_set = False
 
-        self.enabled = True  # allow Analyzer to be disabled
+        self._enabled = True  # allow Analyzer to be disabled
+
+    @property
+    def enabled(self):
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool):
+        self._enabled = value
 
     def reset(self):
         self.current_states = {}
@@ -216,7 +224,7 @@ class AnalyzerList(Analyzer[Any]):
 
     def __init__(self, *args: Analyzer):
         super().__init__()
-        self.analyzers = args
+        self.analyzers = nn.ModuleList(args)
 
     def log_forward(self, name, module, inputs, outputs):
         for analyzer in self.analyzers:
@@ -237,6 +245,13 @@ class AnalyzerList(Analyzer[Any]):
                             working_results: Any | None):
         pass
 
+    @Analyzer.enabled.setter
+    def enabled(self, value: bool):
+        self._enabled = value
+        # also update children so their own logic respects the flag
+        for analyzer in self.analyzers:
+            analyzer.enabled = value
+
     def to_dict(self) -> dict:
         result = dict()
 
@@ -256,6 +271,11 @@ class AnalyzerList(Analyzer[Any]):
         super().register(name, module)
         for analyzer in self.analyzers:
             analyzer.register(name, module)
+
+    def reset(self):
+        super().reset()
+        for analyzer in self.analyzers:
+            analyzer.reset()
 
 
 class PerClassAnalyzer(Analyzer[Any]):

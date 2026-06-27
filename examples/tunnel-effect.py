@@ -16,10 +16,46 @@ def _(mo):
     mo.md(r"""
     # Reproducing the tunnel effect
 
-    This notebook reproduces the Figure 1 workflow from *The Tunnel Effect:
-    Building Data Representations in Deep Neural Networks* for a CIFAR-10
+    This notebook reproduces the Figure 1 workflow from [*The Tunnel Effect:
+    Building Data Representations in Deep Neural Networks*](https://proceedings.neurips.cc/paper_files/paper/2023/file/f249db9ab5975586f36df46f8958c008-Paper-Conference.pdf) for a CIFAR-10
     pretrained VGG19. It tracks the numerical rank and linear-probe accuracy
     of representations across the 18 ReLU layers used in the paper.
+
+    ## Background
+
+    The *tunnel effect* describes a surprising phenomenon in overparameterised
+    deep networks: after the first handful of layers, the network has already
+    built representations that are essentially as useful for the task as
+    anything that follows. The remaining "tunnel" layers keep transforming the
+    representation, but they no longer improve linear separability — instead
+    they progressively *compress* it, collapsing the data onto a
+    lower-dimensional manifold.
+
+    Figure 1 of the paper makes this concrete with two complementary signals,
+    measured at every ReLU activation:
+
+    - **Linear-probe accuracy** — train a simple linear classifier on the
+      (frozen) representation at each layer. This measures how *linearly
+      separable*, and hence how *useful*, the representation already is.
+    - **Numerical rank** — the effective dimensionality of the representation,
+      estimated from the rank of its feature covariance matrix. A falling rank
+      indicates the representation is being compressed.
+
+    The tunnel is the region where probe accuracy has saturated (so deeper
+    layers add no task-relevant information) while the rank keeps decreasing.
+
+    ## What this notebook does
+
+    Rather than re-implementing the instrumentation by hand, we use
+    `torchwatcher` to *interject* analyzers into the pretrained model:
+
+    1. Load a CIFAR-10 pretrained VGG19 and its matching preprocessing.
+    2. Attach a `RankAnalyzer` and a `LinearProbe` to every ReLU activation
+       using `interject_by_match`.
+    3. Run data through the (frozen) backbone to (a) collect per-layer feature
+       ranks and (b) train and evaluate one linear probe per layer.
+    4. Plot rank and probe accuracy against layer depth and shade the resulting
+       tunnel, reproducing the shape of Figure 1.
     """)
     return
 
@@ -41,6 +77,8 @@ def _():
     from torchwatcher.analysis.rank import RankAnalyzer
     from torchwatcher.interjection import interject_by_match, node_selector
 
+    from tqdm import tqdm
+
     return (
         AnalyzerList,
         CIFAR10,
@@ -55,6 +93,7 @@ def _():
         node_selector,
         plt,
         torch,
+        tqdm,
         vgg19,
     )
 
@@ -93,6 +132,22 @@ def _(Path, torch):
         TUNNEL_ACC_FRACTION,
         USE_CACHE,
     )
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Load the model and data
+
+    We load the CIFAR-10 pretrained VGG19 (seed-0 weights) and use the
+    preprocessing transforms that ship with those weights, so the inputs match
+    what the network saw during training. The CIFAR-10 train and test splits
+    are then wrapped in `Subset`s (respecting the sample caps above) and served
+    through `DataLoader`s — the train loader feeds probe training, the test
+    loader is used for rank collection, probe evaluation, and the final
+    accuracy check.
+    """)
+    return
 
 
 @app.cell
@@ -141,6 +196,25 @@ def _(
     return model, test_loader, train_loader
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Attach the analyzers
+
+    Here is the core of the `torchwatcher` workflow. We instantiate the two
+    analyzers — a `RankAnalyzer` to estimate per-layer feature rank and a
+    `LinearProbe` (one 10-class linear classifier per layer) — and combine them
+    in an `AnalyzerList` so they observe the *same* forward pass.
+
+    `interject_by_match` then rewrites the model so that every node matching
+    `node_selector.Activations.is_relu` is observed by the analyzers. The
+    returned `watched_model` behaves exactly like the original VGG19 on the
+    forward pass, but each ReLU output is now intercepted and fed to the
+    analyzers, giving us the 18 measurement points used in Figure 1.
+    """)
+    return
+
+
 @app.cell
 def _(
     AnalyzerList,
@@ -175,6 +249,20 @@ def _(
     return analyzer, probe_trainer, rank_collector, watched_model
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Caching helpers
+
+    Training one probe per layer is the slow part of this notebook, so we cache
+    the computed results to disk. The cache is keyed on every setting that
+    affects the numbers (sample caps, batch size, probe epochs/LR, and the rank
+    parameters); if any of these change the cache is treated as stale and the
+    experiment is re-run.
+    """)
+    return
+
+
 @app.cell
 def _(
     BATCH_SIZE,
@@ -199,7 +287,6 @@ def _(
             "rank_threshold": RANK_THRESHOLD,
         }
 
-
     def load_cached_results():
         if not USE_CACHE or not CACHE_PATH.exists():
             return None
@@ -208,7 +295,6 @@ def _(
         if cached.get("cache_key") != cache_key():
             return None
         return cached["results"]
-
 
     def save_cached_results(results):
         if not USE_CACHE:
@@ -222,8 +308,33 @@ def _(
             CACHE_PATH,
         )
 
-
     return load_cached_results, save_cached_results
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Run the experiment
+
+    With the analyzers attached we can drive the whole measurement pipeline.
+    The backbone is always kept frozen and in `eval` mode; the
+    `set_analyzers` helper just toggles which analyzer is active and whether
+    the probes are in train or eval mode for a given pass:
+
+    1. **`train_probes`** — for each batch, runs a forward pass, sets the
+       targets on the analyzer, and takes a `train_step` so every layer's linear
+       probe learns to classify from that layer's representation. Crucially the
+       probes are trained on detached features, so no gradients flow back into
+       the backbone.
+    2. **`evaluate_final_model`** — measures each trained probe's accuracy and the representation
+       rank the on the test set. Also measures the full network's test accuracy which becomes the
+       reference point for the 95% tunnel threshold.
+
+    `run_experiment` orchestrates these steps (short-circuiting to the cache
+    when available) and returns the per-layer ranks and probe accuracies
+    alongside the final model accuracy.
+    """)
+    return
 
 
 @app.cell
@@ -237,121 +348,97 @@ def _(
     save_cached_results,
     test_loader,
     torch,
+    tqdm,
     train_loader,
     watched_model,
 ):
-    def set_analyzers(*, rank_enabled, probe_enabled, probe_training):
+    def set_analyzers(*, rank_enabled, probe_enabled, training):
+        analyzer.train(training)
+        analyzer.enabled = (rank_enabled or probe_enabled)
         rank_collector.enabled = rank_enabled
         probe_trainer.enabled = probe_enabled
-        probe_trainer.train(probe_training)
-
-
-    def evaluate_final_model():
-        set_analyzers(
-            rank_enabled=False,
-            probe_enabled=False,
-            probe_training=False,
-        )
-        watched_model.eval()
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for inputs, targets in test_loader:
-                inputs = inputs.to(DEVICE)
-                targets = targets.to(DEVICE)
-                logits = watched_model(inputs)
-                correct += (logits.argmax(dim=1) == targets).sum().item()
-                total += targets.numel()
-        return correct / total
-
-
-    def collect_ranks():
-        rank_collector.reset()
-        set_analyzers(
-            rank_enabled=True,
-            probe_enabled=False,
-            probe_training=False,
-        )
-
-        watched_model.eval()
-        with torch.no_grad():
-            for inputs, _targets in test_loader:
-                watched_model(inputs.to(DEVICE))
-
-        return rank_collector.to_dict()
-
 
     def train_probes():
+        watched_model.eval()
         set_analyzers(
             rank_enabled=False,
             probe_enabled=True,
-            probe_training=True,
+            training=True,
         )
-        watched_model.eval()
 
-        for _epoch in range(PROBE_EPOCHS):
+        print("Training linear probes")
+        for _epoch in tqdm(range(PROBE_EPOCHS)):
             for inputs, targets in train_loader:
                 probe_trainer.reset()
-                analyzer.targets = targets.to(DEVICE)
+                probe_trainer.targets = targets.to(DEVICE)
                 watched_model(inputs.to(DEVICE))
                 probe_trainer.train_step()
 
-
-    def evaluate_probes():
-        probe_trainer.reset()
+    def evaluate_final_model():
         set_analyzers(
-            rank_enabled=False,
+            rank_enabled=True,
             probe_enabled=True,
-            probe_training=False,
+            training=False,
         )
+        analyzer.reset()    
         watched_model.eval()
 
+        correct = 0
+        total = 0
         with torch.no_grad():
-            for inputs, targets in test_loader:
-                analyzer.targets = targets.to(DEVICE)
-                watched_model(inputs.to(DEVICE))
-
-        return probe_trainer.to_dict()
-
-
-    def probe_accuracy(score):
-        if "acc" in score:
-            return score["acc"]
-
-        for key, value in score.items():
-            if "acc" in key.lower():
-                return value
-
-        raise KeyError(f"Could not find an accuracy metric in {score.keys()}")
-
+            print("Evaluating model")
+            for inputs, targets in tqdm(test_loader):
+                inputs = inputs.to(DEVICE)
+                targets = targets.to(DEVICE)
+                probe_trainer.targets = targets
+                logits = watched_model(inputs)
+                correct += (logits.argmax(dim=1) == targets).sum().item()
+                total += targets.numel()
+        return correct / total, rank_collector.to_dict(), probe_trainer.to_dict()
 
     def run_experiment():
         cached = load_cached_results()
         if cached is not None:
             return cached
 
-        final_model_accuracy = evaluate_final_model()
-        ranks = collect_ranks()
         train_probes()
-        probe_scores = evaluate_probes()
+        final_model_accuracy, ranks, probe_scores = evaluate_final_model()
 
         layer_names = list(ranks.keys())[:18]
         results = {
             "layer_names": layer_names,
             "layers": list(range(1, len(layer_names) + 1)),
             "ranks": [ranks[name]["features_rank"] for name in layer_names],
-            "probe_acc": [
-                probe_accuracy(probe_scores[name]) for name in layer_names
-            ],
+            "probe_acc": [probe_scores[name]['acc'] for name in layer_names],
             "final_model_accuracy": final_model_accuracy,
         }
         save_cached_results(results)
         return results
 
-
     results = run_experiment()
     results
     return (results,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Visualise the tunnel
+
+    Finally we recreate Figure 1: numerical rank (red, dashed) and linear-probe
+    accuracy (blue) plotted against layer depth on a twin axis. We locate the
+    **tunnel start** as the first layer whose probe accuracy reaches 95% of the
+    full model's accuracy, and shade everything from there to the output.
+
+    Reading the plot: probe accuracy climbs steeply over the early
+    *extractor* layers and then plateaus — once inside the shaded region,
+    deeper layers no longer improve linear separability. Meanwhile the
+    numerical rank keeps falling through the tunnel, showing that those layers
+    are compressing the representation onto a lower-dimensional manifold rather
+    than adding task-relevant structure. That combination of saturated accuracy
+    and shrinking rank is the signature of the tunnel effect.
+    """)
+    return
 
 
 @app.cell
