@@ -1,13 +1,15 @@
 import copy
 from typing import Type, Optional, Dict, Any, List, Union, Callable
 
+import math
+
 import torch
+import torchvision
 from torch import fx
 from torch import nn
 from torch.fx.passes.shape_prop import ShapeProp
 from torch.fx.proxy import Scope, ScopeContextManager
-from torchvision.models.feature_extraction import NodePathTracer, \
-    _set_default_tracer_kwargs
+from torchvision.models.feature_extraction import NodePathTracer
 
 from torchwatcher.interjection.node_selector import node_selector
 from .interjection import Interjection, ForwardInterjection
@@ -76,6 +78,26 @@ class HierarchyTracer(NodePathTracer):
         self.module_stack.pop(module_key)
         return node
 
+
+def _set_default_tracer_kwargs(original_tr_kwargs: Optional[dict[str, Any]]) -> dict[str, Any]:
+    # This is copied from torchvision.models.feature_extraction, but modified so that it doesn't
+    # block tracing inside torchvision.ops (you can manually add those modules to the tracer_kwargs
+    # if you want, but in general usage you probably do want to trace inside them - otherwise things
+    # like tracing ReLUs might miss some!)
+    default_autowrap_modules = (math, torchvision.ops)
+    default_leaf_modules = []
+    result_tracer_kwargs = {} if original_tr_kwargs is None else original_tr_kwargs
+    result_tracer_kwargs["autowrap_modules"] = (
+        tuple(set(result_tracer_kwargs["autowrap_modules"] + default_autowrap_modules))
+        if "autowrap_modules" in result_tracer_kwargs
+        else default_autowrap_modules
+    )
+    result_tracer_kwargs["leaf_modules"] = (
+        list(set(result_tracer_kwargs["leaf_modules"] + default_leaf_modules))
+        if "leaf_modules" in result_tracer_kwargs
+        else default_leaf_modules
+    )
+    return result_tracer_kwargs
 
 def symbolic_trace(model: Union[torch.nn.Module, Callable[..., Any]],
                    tracer_kwargs: Optional[Dict[str, Any]] = None,
