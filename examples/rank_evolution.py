@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.11"
+__generated_with = "0.23.13"
 app = marimo.App(width="medium")
 
 
@@ -465,15 +465,15 @@ def _(plt, results, torch):
 
 @app.cell
 def _(plt, rank_matrix, snapshots, steps):
-    # selected_indices = sorted(
-    #     {
-    #         0,
-    #         min(1, len(snapshots) - 1),
-    #         len(snapshots) // 2,
-    #         len(snapshots) - 1,
-    #     }
-    # )
-    selected_indices = range(len(snapshots))
+    selected_indices = sorted(
+        {
+            0,
+            min(1, len(snapshots) - 1),
+            len(snapshots) // 2,
+            len(snapshots) - 1,
+        }
+    )
+    # selected_indices = range(len(snapshots))
     layers = list(range(1, rank_matrix.shape[1] + 1))
 
     _fig, _ax = plt.subplots(figsize=(7.5, 4.5))
@@ -493,7 +493,7 @@ def _(plt, rank_matrix, snapshots, steps):
     _ax.legend()
     _fig.tight_layout()
     _fig
-    return
+    return (layers,)
 
 
 @app.cell(hide_code=True)
@@ -501,6 +501,34 @@ def _(mo, results):
     mo.md(f"""
     Recorded **{len(results["snapshots"])}** rank snapshots across training.
     """)
+    return
+
+
+@app.cell
+def _(layers, mo, plt, rank_matrix):
+    import matplotlib.animation as animation
+
+    fig, ax = plt.subplots()
+    line, = ax.plot(layers, rank_matrix[0])
+
+    ax.set_ylim(0, 1000)
+
+    def animate(i):
+        line.set_ydata(rank_matrix[i])  # update the data.
+        return line,
+
+
+    ani = animation.FuncAnimation(
+        fig, animate, interval=1, frames=rank_matrix.shape[0])
+
+    # mo.Html(ani.to_jshtml())
+    mo.Html(ani.to_html5_video())
+    ani.save("movie.mp4")
+    return
+
+
+@app.cell
+def _():
     return
 
 
