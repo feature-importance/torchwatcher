@@ -240,10 +240,12 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
 
 
 def _sanitize_shapes(meta) -> str:
+    if 'tensor_meta' not in meta or meta['tensor_meta'] is None:
+        return [1]
     if isinstance(meta['tensor_meta'], dict):
         return [tuple(v.shape) for v in meta['tensor_meta'].values()]
     elif isinstance(meta['tensor_meta'], (list, tuple)) and not isinstance(meta['tensor_meta'], TensorMetadata):
-        return [tuple(v.shape) for v in meta['tensor_meta']]
+        return [tuple(v.shape) for v in meta['tensor_meta'] if v is not None]
     else:
         return [tuple(meta['tensor_meta'].shape)]
 
