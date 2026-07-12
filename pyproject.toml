@@ -28,6 +28,20 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+test = [
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [
+    "src",
+]
+testpaths = [
+    "tests",
+]
+python_files = [
+    "test_*.py",
+]
 
 [project.urls]
 Homepage = "https://github.com/feature-importance/torchwather"

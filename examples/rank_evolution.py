@@ -36,30 +36,31 @@ def _():
 
     import matplotlib.pyplot as plt
     import torch
+    import torchbearer
     from torch import nn
-    from torch.utils.data import DataLoader, Subset
-    from torchvision.datasets import CIFAR10
 
+    from model_utilities.datasets import cifar10_loaders
     from model_utilities.models.cifar_resnet import resnet18_3x3
+    from model_utilities.training.modelfitting import get_device, set_seed
 
     from torchwatcher.analysis.rank import RankAnalyzer
     from torchwatcher.interjection import interject_by_match, node_selector
-
-    from tqdm import tqdm
+    from torchwatcher.training import PeriodicEvaluation
 
     return (
-        CIFAR10,
-        DataLoader,
         Path,
+        PeriodicEvaluation,
         RankAnalyzer,
-        Subset,
+        cifar10_loaders,
+        get_device,
         interject_by_match,
         nn,
         node_selector,
         plt,
         resnet18_3x3,
+        set_seed,
         torch,
-        tqdm,
+        torchbearer,
     )
 
 
@@ -81,7 +82,7 @@ def _(Path, torch):
     NUM_WORKERS = 2
     USE_CACHE = True
 
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    DEVICE = "auto"
     return (
         BATCH_SIZE,
         CACHE_PATH,
@@ -106,9 +107,9 @@ def _(mo):
     mo.md(r"""
     ## Load CIFAR-10
 
-    The training loader is shuffled and used for optimisation. Rank snapshots
-    are measured on a fixed, unshuffled subset of the training split so that
-    each snapshot is based on the same images.
+    `model-utilities` builds the train and validation loaders with the standard
+    CIFAR-10 transforms. The sample caps keep the notebook useful for quick
+    demos while making it easy to scale back up.
     """)
     return
 
@@ -116,70 +117,19 @@ def _(mo):
 @app.cell
 def _(
     BATCH_SIZE,
-    CIFAR10,
     DATA_ROOT,
-    DataLoader,
     NUM_WORKERS,
     RANK_SAMPLE_CAP,
-    Subset,
     TRAIN_SAMPLE_CAP,
+    cifar10_loaders,
 ):
-    from torchvision import transforms
-
-    train_transform = transforms.Compose(
-        [
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=(0.4914, 0.4822, 0.4465),
-                std=(0.2470, 0.2435, 0.2616),
-            ),
-        ]
-    )
-    rank_transform = transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=(0.4914, 0.4822, 0.4465),
-                std=(0.2470, 0.2435, 0.2616),
-            ),
-        ]
-    )
-
-    train_data = CIFAR10(
-        DATA_ROOT,
-        train=True,
-        download=True,
-        transform=train_transform,
-    )
-    rank_data = CIFAR10(
-        DATA_ROOT,
-        train=True,
-        download=True,
-        transform=rank_transform,
-    )
-
-    train_subset = Subset(
-        train_data,
-        range(min(TRAIN_SAMPLE_CAP, len(train_data))),
-    )
-    rank_subset = Subset(
-        rank_data,
-        range(min(RANK_SAMPLE_CAP, len(rank_data))),
-    )
-
-    train_loader = DataLoader(
-        train_subset,
+    train_loader, rank_loader = cifar10_loaders(
+        root=DATA_ROOT,
         batch_size=BATCH_SIZE,
-        shuffle=True,
+        train_sample_cap=TRAIN_SAMPLE_CAP,
+        eval_sample_cap=RANK_SAMPLE_CAP,
         num_workers=NUM_WORKERS,
-    )
-    rank_loader = DataLoader(
-        rank_subset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=NUM_WORKERS,
+        pin_memory=False,
     )
     return rank_loader, train_loader
 
@@ -207,15 +157,19 @@ def _(
     RANK_THRESHOLD,
     RankAnalyzer,
     WEIGHT_DECAY,
+    get_device,
     interject_by_match,
     nn,
     node_selector,
     resnet18_3x3,
+    set_seed,
     torch,
+    torchbearer,
 ):
-    torch.manual_seed(0)
+    set_seed(0)
+    device = get_device(DEVICE)
 
-    model = resnet18_3x3(weights=None).to(DEVICE)
+    model = resnet18_3x3(weights=None, num_classes=10).to(device)
     rank_collector = RankAnalyzer(
         n=RANK_FEATURE_DIM,
         threshold=RANK_THRESHOLD,
@@ -224,7 +178,7 @@ def _(
         model,
         node_selector.Activations.is_relu,
         rank_collector,
-    ).to(DEVICE)
+    ).to(device)
     rank_collector.enabled = False
 
     criterion = nn.CrossEntropyLoss()
@@ -238,7 +192,15 @@ def _(
         optimizer,
         T_max=EPOCHS,
     )
-    return criterion, optimizer, rank_collector, scheduler, watched_model
+    lr_callback = torchbearer.callbacks.TorchScheduler(scheduler)
+    return (
+        criterion,
+        device,
+        lr_callback,
+        optimizer,
+        rank_collector,
+        watched_model,
+    )
 
 
 @app.cell(hide_code=True)
@@ -311,39 +273,38 @@ def _(mo):
     mo.md(r"""
     ## Train and snapshot
 
-    `measure_rank` switches the model to evaluation mode, resets the analyzer,
-    and runs the fixed rank loader without gradients. `train_and_measure`
-    records an initial snapshot before training starts, then records another
-    one after every configured number of batches and at the end of each epoch.
+    The training itself is a plain Torchbearer `Trial`. A torchwatcher
+    `PeriodicEvaluation` callback handles the training-time measurement rhythm:
+    it pauses training every configured number of batches, switches the model
+    to eval mode, runs the rank evaluator without gradients, stores the
+    snapshot, and then restores training mode.
     """)
     return
 
 
 @app.cell
 def _(
-    DEVICE,
     EPOCHS,
+    PeriodicEvaluation,
     RANK_EVERY_N_BATCHES,
     criterion,
+    device,
     load_cached_results,
+    lr_callback,
     optimizer,
     rank_collector,
     rank_loader,
     save_cached_results,
-    scheduler,
-    torch,
-    tqdm,
+    torchbearer,
     train_loader,
     watched_model,
 ):
-    def measure_rank(epoch, batch, global_step, train_loss=None):
+    def measure_rank(model, loader, _state, *, global_step, event):
         rank_collector.reset()
         rank_collector.enabled = True
-        watched_model.eval()
 
-        with torch.no_grad():
-            for inputs, _targets in rank_loader:
-                watched_model(inputs.to(DEVICE))
+        for inputs, _targets in loader:
+            model(inputs.to(next(model.parameters()).device))
 
         rank_collector.enabled = False
         ranks = rank_collector.to_dict()
@@ -357,10 +318,6 @@ def _(
             for name in layer_names
         ]
         return {
-            "epoch": epoch,
-            "batch": batch,
-            "global_step": global_step,
-            "train_loss": train_loss,
             "layer_names": layer_names,
             "ranks": rank_values,
             "normalized_ranks": normalized_rank_values,
@@ -371,46 +328,28 @@ def _(
         if cached is not None:
             return cached
 
-        snapshots = [measure_rank(0, 0, 0)]
-        global_step = 0
+        rank_callback = PeriodicEvaluation(
+            measure_rank,
+            loader=rank_loader,
+            every_n_batches=RANK_EVERY_N_BATCHES,
+            include_start=True,
+            include_end=True,
+        )
 
-        for epoch in range(1, EPOCHS + 1):
-            watched_model.train()
-            rank_collector.enabled = False
-            running_loss = 0.0
-            progress = tqdm(train_loader, desc=f"epoch {epoch}")
-
-            for batch, (inputs, targets) in enumerate(progress, start=1):
-                inputs = inputs.to(DEVICE)
-                targets = targets.to(DEVICE)
-
-                optimizer.zero_grad(set_to_none=True)
-                logits = watched_model(inputs)
-                loss = criterion(logits, targets)
-                loss.backward()
-                optimizer.step()
-
-                global_step += 1
-                running_loss += loss.item()
-                avg_loss = running_loss / batch
-                progress.set_postfix(loss=f"{avg_loss:.3f}")
-
-                if global_step % RANK_EVERY_N_BATCHES == 0:
-                    snapshots.append(
-                        measure_rank(epoch, batch, global_step, avg_loss)
-                    )
-                    watched_model.train()
-                    rank_collector.enabled = False
-
-            scheduler.step()
-            if snapshots[-1]["global_step"] != global_step:
-                snapshots.append(
-                    measure_rank(epoch, batch, global_step, avg_loss)
-                )
+        trial = torchbearer.Trial(
+            watched_model,
+            optimizer,
+            criterion,
+            metrics=["loss", "acc", "lr"],
+            callbacks=[rank_callback, lr_callback],
+        )
+        trial.with_generators(train_generator=train_loader).to(device)
+        history = trial.run(EPOCHS, verbose=2)
 
         results = {
-            "snapshots": snapshots,
-            "layer_names": snapshots[0]["layer_names"],
+            "history": history,
+            "snapshots": rank_callback.records,
+            "layer_names": rank_callback.records[0]["layer_names"],
         }
         save_cached_results(results)
         return results
@@ -448,8 +387,6 @@ def _(plt, results, torch):
         aspect="auto",
         origin="lower",
         cmap="viridis",
-        vmin=0,
-        vmax=1,
     )
     _ax.set_xlabel("Training step")
     _ax.set_ylabel("ReLU layer")
@@ -457,7 +394,7 @@ def _(plt, results, torch):
     _ax.set_xticklabels(steps, rotation=45, ha="right")
     _ax.set_yticks(range(len(layer_names)))
     _ax.set_yticklabels(range(1, len(layer_names) + 1))
-    _fig.colorbar(image, ax=_ax, label="Normalized rank")
+    _fig.colorbar(image, ax=_ax, label="Rank")
     _fig.tight_layout()
     _fig
     return rank_matrix, snapshots, steps
@@ -511,7 +448,7 @@ def _(layers, mo, plt, rank_matrix):
     fig, ax = plt.subplots()
     line, = ax.plot(layers, rank_matrix[0])
 
-    ax.set_ylim(0, 1000)
+    ax.set_ylim(0, rank_matrix.max().item() * 1.05)
 
     def animate(i):
         line.set_ydata(rank_matrix[i])  # update the data.
