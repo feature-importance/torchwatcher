@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.13"
+__generated_with = "0.23.11"
 app = marimo.App(width="medium")
 
 
@@ -34,6 +34,8 @@ def _(mo):
 def _():
     from pathlib import Path
 
+    import functools
+
     import matplotlib.pyplot as plt
     import torch
     import torchbearer
@@ -52,6 +54,7 @@ def _():
         PeriodicEvaluation,
         RankAnalyzer,
         cifar10_loaders,
+        functools,
         get_device,
         interject_by_match,
         nn,
@@ -65,15 +68,15 @@ def _():
 
 
 @app.cell
-def _(Path, torch):
+def _(Path):
     DATA_ROOT = Path("~/data").expanduser()
     CACHE_PATH = Path(".cache/rank-evolution-results.pt")
 
-    EPOCHS = 20
+    EPOCHS = 2
     BATCH_SIZE = 128
     TRAIN_SAMPLE_CAP = 10000
-    RANK_SAMPLE_CAP = 2048
-    RANK_EVERY_N_BATCHES = 10
+    RANK_SAMPLE_CAP = 1024
+    RANK_EVERY_N_BATCHES = 50
     LEARNING_RATE = 0.1
     MOMENTUM = 0.9
     WEIGHT_DECAY = 5e-4
@@ -157,6 +160,7 @@ def _(
     RANK_THRESHOLD,
     RankAnalyzer,
     WEIGHT_DECAY,
+    functools,
     get_device,
     interject_by_match,
     nn,
@@ -188,10 +192,7 @@ def _(
         momentum=MOMENTUM,
         weight_decay=WEIGHT_DECAY,
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=EPOCHS,
-    )
+    scheduler = functools.partial(torch.optim.lr_scheduler.CosineAnnealingLR, T_max=EPOCHS)
     lr_callback = torchbearer.callbacks.TorchScheduler(scheduler)
     return (
         criterion,
@@ -461,11 +462,6 @@ def _(layers, mo, plt, rank_matrix):
     # mo.Html(ani.to_jshtml())
     mo.Html(ani.to_html5_video())
     ani.save("movie.mp4")
-    return
-
-
-@app.cell
-def _():
     return
 
 
