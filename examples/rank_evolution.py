@@ -22,7 +22,7 @@ def _(mo):
     The setup is intentionally close to the tunnel-effect example: we attach a
     `RankAnalyzer` to every ReLU activation with `torchwatcher`, run images
     through the watched model, and plot the resulting per-layer ranks. The main
-    difference is that the model is not frozen. We train a CIFAR ResNet-18
+    difference is that the model is not frozen. We train a CIFAR-appropriate ResNet-18
     (`resnet18_3x3` from `model-utilities`) and take rank snapshots every few
     batches, because the representation geometry often moves fastest at the
     start of optimisation.
@@ -47,11 +47,11 @@ def _():
 
     from torchwatcher.analysis.rank import RankAnalyzer
     from torchwatcher.interjection import interject_by_match, node_selector
-    from torchwatcher.training import PeriodicEvaluation
+    from torchwatcher.training import AnalyzerEvaluation
 
     return (
+        AnalyzerEvaluation,
         Path,
-        PeriodicEvaluation,
         RankAnalyzer,
         cifar10_loaders,
         functools,
@@ -70,7 +70,6 @@ def _():
 @app.cell
 def _(Path):
     DATA_ROOT = Path("~/data").expanduser()
-    CACHE_PATH = Path(".cache/rank-evolution-results.pt")
 
     EPOCHS = 2
     BATCH_SIZE = 128
@@ -83,12 +82,10 @@ def _(Path):
     RANK_FEATURE_DIM = 4096
     RANK_THRESHOLD = 1e-3
     NUM_WORKERS = 2
-    USE_CACHE = True
 
     DEVICE = "auto"
     return (
         BATCH_SIZE,
-        CACHE_PATH,
         DATA_ROOT,
         DEVICE,
         EPOCHS,
@@ -100,7 +97,6 @@ def _(Path):
         RANK_SAMPLE_CAP,
         RANK_THRESHOLD,
         TRAIN_SAMPLE_CAP,
-        USE_CACHE,
         WEIGHT_DECAY,
     )
 
@@ -110,7 +106,7 @@ def _(mo):
     mo.md(r"""
     ## Load CIFAR-10
 
-    `model-utilities` builds the train and validation loaders with the standard
+    The `cifar10_loaders` from `model-utilities` creates train and validation loaders with the standard
     CIFAR-10 transforms. The sample caps keep the notebook useful for quick
     demos while making it easy to scale back up.
     """)
@@ -174,24 +170,15 @@ def _(
     device = get_device(DEVICE)
 
     model = resnet18_3x3(weights=None, num_classes=10).to(device)
-    rank_collector = RankAnalyzer(
-        n=RANK_FEATURE_DIM,
-        threshold=RANK_THRESHOLD,
-    )
-    watched_model = interject_by_match(
-        model,
-        node_selector.Activations.is_relu,
-        rank_collector,
-    ).to(device)
+
+    rank_collector = RankAnalyzer(n=RANK_FEATURE_DIM, threshold=RANK_THRESHOLD)
     rank_collector.enabled = False
 
+    watched_model = interject_by_match(model, node_selector.Activations.is_relu, rank_collector).to(device)
+
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(
-        watched_model.parameters(),
-        lr=LEARNING_RATE,
-        momentum=MOMENTUM,
-        weight_decay=WEIGHT_DECAY,
-    )
+    optimizer = torch.optim.SGD(watched_model.parameters(), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
+
     scheduler = functools.partial(torch.optim.lr_scheduler.CosineAnnealingLR, T_max=EPOCHS)
     lr_callback = torchbearer.callbacks.TorchScheduler(scheduler)
     return (
@@ -207,134 +194,39 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Caching helpers
-
-    The cache is keyed by the settings that affect training and rank
-    collection. Disable `USE_CACHE` above to force a fresh run.
-    """)
-    return
-
-
-@app.cell
-def _(
-    BATCH_SIZE,
-    CACHE_PATH,
-    EPOCHS,
-    LEARNING_RATE,
-    MOMENTUM,
-    RANK_EVERY_N_BATCHES,
-    RANK_FEATURE_DIM,
-    RANK_SAMPLE_CAP,
-    RANK_THRESHOLD,
-    TRAIN_SAMPLE_CAP,
-    USE_CACHE,
-    WEIGHT_DECAY,
-    torch,
-):
-    def cache_key():
-        return {
-            "epochs": EPOCHS,
-            "batch_size": BATCH_SIZE,
-            "train_sample_cap": TRAIN_SAMPLE_CAP,
-            "rank_sample_cap": RANK_SAMPLE_CAP,
-            "rank_every_n_batches": RANK_EVERY_N_BATCHES,
-            "learning_rate": LEARNING_RATE,
-            "momentum": MOMENTUM,
-            "weight_decay": WEIGHT_DECAY,
-            "rank_feature_dim": RANK_FEATURE_DIM,
-            "rank_threshold": RANK_THRESHOLD,
-        }
-
-    def load_cached_results():
-        if not USE_CACHE or not CACHE_PATH.exists():
-            return None
-
-        cached = torch.load(CACHE_PATH, map_location="cpu")
-        if cached.get("cache_key") != cache_key():
-            return None
-        return cached["results"]
-
-    def save_cached_results(results):
-        if not USE_CACHE:
-            return
-        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "cache_key": cache_key(),
-                "results": results,
-            },
-            CACHE_PATH,
-        )
-
-    return load_cached_results, save_cached_results
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
     ## Train and snapshot
 
     The training itself is a plain Torchbearer `Trial`. A torchwatcher
-    `PeriodicEvaluation` callback handles the training-time measurement rhythm:
-    it pauses training every configured number of batches, switches the model
-    to eval mode, runs the rank evaluator without gradients, stores the
-    snapshot, and then restores training mode.
+    `AnalyzerEvaluation` handles the analyzer housekeeping: it resets and
+    enables the rank analyzer, runs the fixed loader with the model in eval
+    mode, stores the analyzer's native result, and then restores training
+    state. Behind the scenes, timing is delegated to the callback helpers from
+    `model-utilities`. Marimo's persistent cache wraps the experiment so
+    rerunning the notebook can restore the rank snapshots directly.
     """)
     return
 
 
 @app.cell
 def _(
+    AnalyzerEvaluation,
     EPOCHS,
-    PeriodicEvaluation,
     RANK_EVERY_N_BATCHES,
     criterion,
     device,
-    load_cached_results,
     lr_callback,
+    mo,
     optimizer,
     rank_collector,
     rank_loader,
-    save_cached_results,
     torchbearer,
     train_loader,
     watched_model,
 ):
-    def measure_rank(model, loader, _state, *, global_step, event):
-        rank_collector.reset()
-        rank_collector.enabled = True
-
-        for inputs, _targets in loader:
-            model(inputs.to(next(model.parameters()).device))
-
-        rank_collector.enabled = False
-        ranks = rank_collector.to_dict()
-        layer_names = list(ranks.keys())
-        rank_values = [
-            ranks[name].get("features_rank", float("nan"))
-            for name in layer_names
-        ]
-        normalized_rank_values = [
-            ranks[name].get("normalized_features_rank", float("nan"))
-            for name in layer_names
-        ]
-        return {
-            "layer_names": layer_names,
-            "ranks": rank_values,
-            "normalized_ranks": normalized_rank_values,
-        }
-
     def train_and_measure():
-        cached = load_cached_results()
-        if cached is not None:
-            return cached
-
-        rank_callback = PeriodicEvaluation(
-            measure_rank,
-            loader=rank_loader,
-            every_n_batches=RANK_EVERY_N_BATCHES,
-            include_start=True,
-            include_end=True,
+        rank_evaluation = AnalyzerEvaluation(
+            rank_collector,
+            rank_loader,
         )
 
         trial = torchbearer.Trial(
@@ -342,20 +234,27 @@ def _(
             optimizer,
             criterion,
             metrics=["loss", "acc", "lr"],
-            callbacks=[rank_callback, lr_callback],
+            callbacks=[
+                *rank_evaluation.callbacks(
+                    every_n_batches=RANK_EVERY_N_BATCHES,
+                    include_start=True,
+                    include_end=True,
+                ),
+                lr_callback,
+            ],
         )
         trial.with_generators(train_generator=train_loader).to(device)
         history = trial.run(EPOCHS, verbose=2)
 
         results = {
             "history": history,
-            "snapshots": rank_callback.records,
-            "layer_names": rank_callback.records[0]["layer_names"],
+            "snapshots": rank_evaluation.records,
+            "layer_names": list(rank_evaluation.records[0]["result"].keys()),
         }
-        save_cached_results(results)
         return results
 
-    results = train_and_measure()
+    with mo.persistent_cache(name="rank-evolution-results"):
+        results = train_and_measure()
     results
     return (results,)
 
@@ -378,7 +277,13 @@ def _(plt, results, torch):
     layer_names = results["layer_names"]
     steps = [snapshot["global_step"] for snapshot in snapshots]
     rank_matrix = torch.tensor(
-        [snapshot["ranks"] for snapshot in snapshots],
+        [
+            [
+                snapshot["result"][name].get("features_rank", float("nan"))
+                for name in layer_names
+            ]
+            for snapshot in snapshots
+        ],
         dtype=torch.float32,
     )
 

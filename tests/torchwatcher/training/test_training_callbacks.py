@@ -1,91 +1,130 @@
 import torch
 import torchbearer
 from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
 
-from torchwatcher.training import PeriodicEvaluation
+from torchwatcher.training import AnalyzerEvaluation
 
 
-def test_periodic_evaluation_records_metadata_and_restores_training_mode():
-    model = nn.Linear(2, 1)
+class FakeAnalyzer:
+    def __init__(self, result=None):
+        self.enabled = False
+        self.reset_count = 0
+        self.result = result or {"layer": {"value": 1}}
+
+    def reset(self):
+        self.reset_count += 1
+
+    def to_dict(self):
+        return self.result
+
+
+class RecordingModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(2, 1)
+        self.calls = []
+
+    def forward(self, x):
+        self.calls.append((self.training, torch.is_grad_enabled(), x.device))
+        return self.linear(x)
+
+
+def test_analyzer_evaluation_records_and_restores_state():
+    model = RecordingModel()
     model.train()
-    calls = []
-
-    def evaluator(model, loader, state, *, global_step, event):
-        calls.append((model.training, torch.is_grad_enabled(), loader))
-        return {"seen_step": global_step, "seen_event": event}
-
-    callback = PeriodicEvaluation(
-        evaluator,
-        loader="loader",
-        every_n_batches=2,
-        include_start=True,
-        include_end=True,
+    analyzer = FakeAnalyzer()
+    loader = DataLoader(
+        TensorDataset(torch.randn(2, 2), torch.ones(2)),
+        batch_size=1,
     )
+    evaluation = AnalyzerEvaluation(analyzer, loader)
     state = {
         torchbearer.MODEL: model,
         torchbearer.EPOCH: 0,
-        torchbearer.BATCH: 0,
-    }
-
-    callback.on_start(state)
-    callback.on_step_training(state)
-    state[torchbearer.BATCH] = 1
-    callback.on_step_training(state)
-    callback.on_end(state)
-
-    assert model.training
-    assert calls == [
-        (False, False, "loader"),
-        (False, False, "loader"),
-    ]
-    assert callback.records == [
-        {
-            "event": "start",
-            "epoch": 0,
-            "batch": 0,
-            "global_step": 0,
-            "seen_step": 0,
-            "seen_event": "start",
-        },
-        {
-            "event": "batch",
-            "epoch": 1,
-            "batch": 2,
-            "global_step": 2,
-            "seen_step": 2,
-            "seen_event": "batch",
-        },
-    ]
-
-
-def test_periodic_evaluation_records_final_step_when_not_already_recorded():
-    model = nn.Linear(2, 1)
-
-    def evaluator(*_args, global_step, event):
-        return f"{event}:{global_step}"
-
-    callback = PeriodicEvaluation(
-        evaluator,
-        every_n_batches=3,
-        include_start=False,
-        include_end=True,
-    )
-    state = {
-        torchbearer.MODEL: model,
-        torchbearer.EPOCH: 1,
         torchbearer.BATCH: 1,
     }
 
-    callback.on_step_training(state)
-    callback.on_step_training(state)
-    callback.on_end(state)
+    record = evaluation.record(state, event="batch", global_step=2)
 
-    assert callback.records == [
-        {
-            "event": "end",
-            "epoch": 2,
-            "batch": None,
-            "global_step": 2,
-            "result": "end:2",
-        }
+    assert model.training
+    assert not analyzer.enabled
+    assert analyzer.reset_count == 1
+    assert model.calls == [
+        (False, False, model.linear.weight.device),
+        (False, False, model.linear.weight.device),
     ]
+    assert record == {
+        "event": "batch",
+        "epoch": 1,
+        "batch": 2,
+        "global_step": 2,
+        "result": {"layer": {"value": 1}},
+    }
+
+
+def test_analyzer_evaluation_composes_with_model_utilities_schedule():
+    model = RecordingModel()
+    train_loader = DataLoader(
+        TensorDataset(torch.randn(4, 2), torch.zeros(4, 1)),
+        batch_size=2,
+    )
+    eval_loader = DataLoader(
+        TensorDataset(torch.randn(1, 2), torch.tensor([0])),
+        batch_size=1,
+    )
+    evaluation = AnalyzerEvaluation(FakeAnalyzer(), eval_loader)
+    trial = torchbearer.Trial(
+        model,
+        torch.optim.SGD(model.parameters(), lr=0.01),
+        nn.BCEWithLogitsLoss(),
+        metrics=["loss"],
+        callbacks=evaluation.callbacks(
+            every_n_batches=1,
+            include_start=True,
+            include_end=True,
+        ),
+    )
+
+    trial.with_generators(train_generator=train_loader).to("cpu")
+    trial.run(1, verbose=0)
+
+    assert [record["event"] for record in evaluation.records] == [
+        "start",
+        "batch",
+        "batch",
+    ]
+    assert [record["global_step"] for record in evaluation.records] == [0, 1, 2]
+
+
+def test_analyzer_evaluation_accepts_arbitrary_training_iteration_schedule():
+    model = RecordingModel()
+    train_loader = DataLoader(
+        TensorDataset(torch.randn(6, 2), torch.zeros(6, 1)),
+        batch_size=2,
+    )
+    eval_loader = DataLoader(
+        TensorDataset(torch.randn(1, 2), torch.tensor([0])),
+        batch_size=1,
+    )
+    evaluation = AnalyzerEvaluation(FakeAnalyzer(), eval_loader)
+    trial = torchbearer.Trial(
+        model,
+        torch.optim.SGD(model.parameters(), lr=0.01),
+        nn.BCEWithLogitsLoss(),
+        metrics=["loss"],
+        callbacks=evaluation.callbacks(
+            schedule=[0, 2],
+            include_start=False,
+            include_end=False,
+        ),
+    )
+
+    trial.with_generators(train_generator=train_loader).to("cpu")
+    trial.run(1, verbose=0)
+
+    assert [record["event"] for record in evaluation.records] == [
+        "batch",
+        "batch",
+    ]
+    assert [record["global_step"] for record in evaluation.records] == [1, 3]

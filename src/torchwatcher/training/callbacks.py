@@ -1,32 +1,44 @@
-from collections.abc import Callable, MutableMapping
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import torch
 import torchbearer
+from model_utilities.utils.callbacks import at_training_iterations
 from torchbearer.callbacks import Callback
 
+_GLOBAL_STEP = torchbearer.StateKey("torchwatcher.global_step")
 
-class PeriodicEvaluation(Callback):
-    """Run an evaluator while Torchbearer training is in progress.
 
-    The callback temporarily switches the model to eval mode, runs the
-    evaluator under ``torch.no_grad()``, stores the returned record, and then
-    restores the model's previous training mode.
+class AnalyzerEvaluation(Callback):
+    """Evaluate an analyzer over a loader during Torchbearer training.
+
+    Use ``callbacks`` to attach the evaluation on a fixed period or any
+    ``model_utilities.utils.callbacks.at_training_iterations`` schedule.
     """
 
     def __init__(
         self,
-        evaluator: Callable[..., Any],
+        analyzer,
+        loader,
         *,
-        loader=None,
-        every_n_batches: int | None = None,
-        schedule: Callable[[int], bool] | None = None,
-        include_start: bool = True,
-        include_end: bool = True,
-        records: list[Any] | None = None,
+        prepare_inputs: Callable[[Any, torch.device], Any] | None = None,
+        records: list[dict] | None = None,
     ):
         super().__init__()
+        self.analyzer = analyzer
+        self.loader = loader
+        self.prepare_inputs = prepare_inputs or _default_inputs
+        self.records = [] if records is None else records
+        self._last_recorded_step: int | None = None
 
+    def callbacks(
+        self,
+        *,
+        every_n_batches: int | None = None,
+        schedule=None,
+        include_start: bool = True,
+        include_end: bool = True,
+    ) -> list[Callback]:
         if every_n_batches is None and schedule is None:
             raise ValueError("every_n_batches or schedule must be provided")
         if every_n_batches is not None and schedule is not None:
@@ -34,95 +46,121 @@ class PeriodicEvaluation(Callback):
         if every_n_batches is not None and every_n_batches <= 0:
             raise ValueError("every_n_batches must be a positive integer")
 
-        self.evaluator = evaluator
-        self.loader = loader
-        self.every_n_batches = every_n_batches
-        self.schedule = schedule
-        self.include_start = include_start
-        self.include_end = include_end
-        self.records = [] if records is None else records
-        self.global_step = 0
-        self._last_recorded_step: int | None = None
+        if every_n_batches is not None:
+            schedule = lambda index: (index + 1) % every_n_batches == 0
 
-    def state_dict(self):
-        return {
-            "global_step": self.global_step,
-            "last_recorded_step": self._last_recorded_step,
-            "records": self.records,
-        }
+        callbacks = []
+        if include_start:
+            callbacks.append(_RecordAnalyzerEvaluation(self, "start"))
 
-    def load_state_dict(self, state_dict):
-        self.global_step = state_dict.get("global_step", 0)
-        self._last_recorded_step = state_dict.get("last_recorded_step")
-        self.records = state_dict.get("records", [])
-        return self
+        callbacks.append(_TrainingIterationCounter())
+        callbacks.append(at_training_iterations(schedule)(self))
 
-    def on_start(self, state):
-        if self.include_start:
-            self._record(state, event="start", global_step=0)
+        if include_end:
+            callbacks.append(_RecordAnalyzerEvaluation(self, "end"))
+
+        return callbacks
 
     def on_step_training(self, state):
-        self.global_step += 1
-        if self._should_record(self.global_step):
-            self._record(
-                state,
-                event="batch",
-                global_step=self.global_step,
-            )
+        self.record(
+            state,
+            event="batch",
+            global_step=state.get(_GLOBAL_STEP),
+        )
 
-    def on_end(self, state):
-        if self.include_end and self._last_recorded_step != self.global_step:
-            self._record(state, event="end", global_step=self.global_step)
-
-    def _should_record(self, global_step):
-        if self.every_n_batches is not None:
-            return global_step % self.every_n_batches == 0
-        return self.schedule(global_step)
-
-    def _record(self, state, *, event, global_step):
+    def record(self, state, *, event, global_step=None) -> dict:
         model = state[torchbearer.MODEL]
+        device = next(model.parameters()).device
         was_training = model.training
+        was_enabled = self.analyzer.enabled
+
+        self.analyzer.reset()
+        self.analyzer.enabled = True
         model.eval()
 
         try:
             with torch.no_grad():
-                record = self.evaluator(
-                    model,
-                    self.loader,
-                    state,
-                    global_step=global_step,
-                    event=event,
-                )
+                for batch in self.loader:
+                    inputs = self.prepare_inputs(batch, device)
+                    _forward(model, inputs)
+            result = self.analyzer.to_dict()
         finally:
+            self.analyzer.enabled = was_enabled
             model.train(was_training)
 
-        record = self._with_metadata(record, state, event, global_step)
-        self.records.append(record)
-        self._last_recorded_step = global_step
-        return record
+        if global_step is None:
+            global_step = state.get(_GLOBAL_STEP, self._last_recorded_step)
 
-    def _with_metadata(self, record, state, event, global_step):
-        metadata = {
+        record = {
             "event": event,
             "epoch": _epoch(state, event),
             "batch": _batch(state, event),
             "global_step": global_step,
+            "result": result,
         }
+        self.records.append(record)
+        self._last_recorded_step = global_step
+        return record
 
-        if isinstance(record, MutableMapping):
-            return {**metadata, **record}
 
-        return {
-            **metadata,
-            "result": record,
-        }
+class _RecordAnalyzerEvaluation(Callback):
+    def __init__(self, evaluation: AnalyzerEvaluation, event: str):
+        super().__init__()
+        self.evaluation = evaluation
+        self.event = event
+
+    def on_start(self, state):
+        if self.event == "start":
+            self.evaluation.record(state, event="start", global_step=0)
+
+    def on_end(self, state):
+        if self.event == "end":
+            global_step = state.get(_GLOBAL_STEP)
+            if self.evaluation._last_recorded_step != global_step:
+                self.evaluation.record(
+                    state,
+                    event="end",
+                    global_step=global_step,
+                )
+
+
+class _TrainingIterationCounter(Callback):
+    def on_start(self, state):
+        state[_GLOBAL_STEP] = 0
+
+    def on_step_training(self, state):
+        state[_GLOBAL_STEP] = state.get(_GLOBAL_STEP, 0) + 1
+
+
+def _default_inputs(batch, device):
+    inputs = batch[0] if isinstance(batch, Sequence) else batch
+    return _to_device(inputs, device)
+
+
+def _to_device(value, device):
+    if torch.is_tensor(value):
+        return value.to(device)
+    if isinstance(value, tuple):
+        return tuple(_to_device(item, device) for item in value)
+    if isinstance(value, list):
+        return [_to_device(item, device) for item in value]
+    if isinstance(value, dict):
+        return {key: _to_device(item, device) for key, item in value.items()}
+    return value
+
+
+def _forward(model, inputs):
+    if isinstance(inputs, tuple):
+        return model(*inputs)
+    if isinstance(inputs, dict):
+        return model(**inputs)
+    return model(inputs)
 
 
 def _epoch(state, event):
     if event == "start":
         return 0
-    epoch = state.get(torchbearer.EPOCH, 0)
-    return epoch + 1
+    return state.get(torchbearer.EPOCH, 0) + 1
 
 
 def _batch(state, event):

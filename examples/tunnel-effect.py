@@ -103,7 +103,6 @@ def _(Path, torch):
     # Practical defaults. Increase the sample caps and probe epochs for a
     # closer, slower reproduction of the paper figure.
     DATA_ROOT = Path("~/data").expanduser()
-    CACHE_PATH = Path(".cache/tunnel-effect-results.pt")
 
     TRAIN_SAMPLE_CAP = 2048
     TEST_SAMPLE_CAP = 10000
@@ -114,12 +113,10 @@ def _(Path, torch):
     RANK_THRESHOLD = 1e-3
     TUNNEL_ACC_FRACTION = 0.95
     NUM_WORKERS = 0
-    USE_CACHE = True
 
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     return (
         BATCH_SIZE,
-        CACHE_PATH,
         DATA_ROOT,
         DEVICE,
         NUM_WORKERS,
@@ -130,7 +127,6 @@ def _(Path, torch):
         TEST_SAMPLE_CAP,
         TRAIN_SAMPLE_CAP,
         TUNNEL_ACC_FRACTION,
-        USE_CACHE,
     )
 
 
@@ -252,68 +248,6 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Caching helpers
-
-    Training one probe per layer is the slow part of this notebook, so we cache
-    the computed results to disk. The cache is keyed on every setting that
-    affects the numbers (sample caps, batch size, probe epochs/LR, and the rank
-    parameters); if any of these change the cache is treated as stale and the
-    experiment is re-run.
-    """)
-    return
-
-
-@app.cell
-def _(
-    BATCH_SIZE,
-    CACHE_PATH,
-    PROBE_EPOCHS,
-    PROBE_LR,
-    RANK_FEATURE_DIM,
-    RANK_THRESHOLD,
-    TEST_SAMPLE_CAP,
-    TRAIN_SAMPLE_CAP,
-    USE_CACHE,
-    torch,
-):
-    def cache_key():
-        return {
-            "train_sample_cap": TRAIN_SAMPLE_CAP,
-            "test_sample_cap": TEST_SAMPLE_CAP,
-            "batch_size": BATCH_SIZE,
-            "probe_epochs": PROBE_EPOCHS,
-            "probe_lr": PROBE_LR,
-            "rank_feature_dim": RANK_FEATURE_DIM,
-            "rank_threshold": RANK_THRESHOLD,
-        }
-
-    def load_cached_results():
-        if not USE_CACHE or not CACHE_PATH.exists():
-            return None
-
-        cached = torch.load(CACHE_PATH, map_location="cpu")
-        if cached.get("cache_key") != cache_key():
-            return None
-        return cached["results"]
-
-    def save_cached_results(results):
-        if not USE_CACHE:
-            return
-        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "cache_key": cache_key(),
-                "results": results,
-            },
-            CACHE_PATH,
-        )
-
-    return load_cached_results, save_cached_results
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
     ## Run the experiment
 
     With the analyzers attached we can drive the whole measurement pipeline.
@@ -330,9 +264,10 @@ def _(mo):
        rank the on the test set. Also measures the full network's test accuracy which becomes the
        reference point for the 95% tunnel threshold.
 
-    `run_experiment` orchestrates these steps (short-circuiting to the cache
-    when available) and returns the per-layer ranks and probe accuracies
-    alongside the final model accuracy.
+    `run_experiment` orchestrates these steps and returns the per-layer ranks
+    and probe accuracies alongside the final model accuracy. The expensive
+    experiment block is wrapped in Marimo's persistent cache, so subsequent
+    notebook runs can restore the results without retraining the probes.
     """)
     return
 
@@ -342,10 +277,9 @@ def _(
     DEVICE,
     PROBE_EPOCHS,
     analyzer,
-    load_cached_results,
+    mo,
     probe_trainer,
     rank_collector,
-    save_cached_results,
     test_loader,
     torch,
     tqdm,
@@ -397,10 +331,6 @@ def _(
         return correct / total, rank_collector.to_dict(), probe_trainer.to_dict()
 
     def run_experiment():
-        cached = load_cached_results()
-        if cached is not None:
-            return cached
-
         train_probes()
         final_model_accuracy, ranks, probe_scores = evaluate_final_model()
 
@@ -412,10 +342,10 @@ def _(
             "probe_acc": [probe_scores[name]['acc'] for name in layer_names],
             "final_model_accuracy": final_model_accuracy,
         }
-        save_cached_results(results)
         return results
 
-    results = run_experiment()
+    with mo.persistent_cache(name="tunnel-effect-results"):
+        results = run_experiment()
     results
     return (results,)
 
