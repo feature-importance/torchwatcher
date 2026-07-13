@@ -63,6 +63,76 @@ def test_analyzer_evaluation_records_and_restores_state():
     }
 
 
+def test_analyzer_evaluation_can_enable_gradient_computation():
+    model = RecordingModel()
+    analyzer = FakeAnalyzer()
+    loader = DataLoader(
+        TensorDataset(torch.randn(2, 2), torch.ones(2)),
+        batch_size=1,
+    )
+    evaluation = AnalyzerEvaluation(
+        analyzer,
+        loader,
+        compute_gradients=True,
+    )
+    state = {torchbearer.MODEL: model}
+
+    evaluation.record(state, event="batch", global_step=1)
+
+    assert model.calls == [
+        (False, True, model.linear.weight.device),
+        (False, True, model.linear.weight.device),
+    ]
+    assert model.linear.weight.grad is None
+
+
+def test_analyzer_evaluation_runs_optional_backward_callback():
+    model = RecordingModel()
+    original_weight_grad = torch.ones_like(model.linear.weight)
+    model.linear.weight.grad = original_weight_grad.clone()
+    analyzer = FakeAnalyzer()
+    loader = DataLoader(
+        TensorDataset(torch.randn(2, 2), torch.ones(2)),
+        batch_size=1,
+    )
+    backward_calls = []
+
+    def backward(outputs, batch):
+        backward_calls.append(batch)
+        return outputs.sum()
+
+    evaluation = AnalyzerEvaluation(
+        analyzer,
+        loader,
+        compute_gradients=True,
+        backward=backward,
+    )
+    state = {torchbearer.MODEL: model}
+
+    evaluation.record(state, event="batch", global_step=1)
+
+    assert len(backward_calls) == 2
+    assert torch.equal(model.linear.weight.grad, original_weight_grad)
+
+
+def test_analyzer_evaluation_rejects_backward_without_gradients():
+    loader = DataLoader(
+        TensorDataset(torch.randn(1, 2), torch.ones(1)),
+        batch_size=1,
+    )
+
+    try:
+        AnalyzerEvaluation(
+            FakeAnalyzer(),
+            loader,
+            backward=lambda outputs, batch: outputs.sum(),
+        )
+    except ValueError as exc:
+        assert "compute_gradients" in str(exc)
+    else:
+        raise AssertionError("AnalyzerEvaluation accepted backward without gradients")
+
+
 def test_analyzer_evaluation_composes_with_model_utilities_schedule():
     model = RecordingModel()
     train_loader = DataLoader(

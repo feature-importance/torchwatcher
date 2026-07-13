@@ -13,7 +13,10 @@ class AnalyzerEvaluation(Callback):
     """Evaluate an analyzer over a loader during Torchbearer training.
 
     Use ``callbacks`` to attach the evaluation on a fixed period or any
-    ``model_utilities.utils.callbacks.at_training_iterations`` schedule.
+    ``model_utilities.utils.callbacks.at_training_iterations`` schedule. By
+    default, snapshot passes run with gradient computation disabled. Set
+    ``compute_gradients=True`` and optionally provide ``backward`` for analyzers
+    that need a backward pass.
     """
 
     def __init__(
@@ -22,12 +25,21 @@ class AnalyzerEvaluation(Callback):
         loader,
         *,
         prepare_inputs: Callable[[Any, torch.device], Any] | None = None,
+        compute_gradients: bool = False,
+        backward: Callable[[Any, Any], Any] | None = None,
         records: list[dict] | None = None,
     ):
         super().__init__()
+        if backward is not None and not compute_gradients:
+            raise ValueError(
+                "compute_gradients must be True when backward is provided"
+            )
+
         self.analyzer = analyzer
         self.loader = loader
         self.prepare_inputs = prepare_inputs or _default_inputs
+        self.compute_gradients = compute_gradients
+        self.backward = backward
         self.records = [] if records is None else records
         self._last_recorded_step: int | None = None
 
@@ -73,18 +85,28 @@ class AnalyzerEvaluation(Callback):
         device = next(model.parameters()).device
         was_training = model.training
         was_enabled = self.analyzer.enabled
+        saved_gradients = (
+            _save_gradients(model) if self.compute_gradients else None
+        )
 
         self.analyzer.reset()
         self.analyzer.enabled = True
         model.eval()
 
         try:
-            with torch.no_grad():
+            with torch.set_grad_enabled(self.compute_gradients):
                 for batch in self.loader:
+                    if self.compute_gradients:
+                        model.zero_grad(set_to_none=True)
                     inputs = self.prepare_inputs(batch, device)
-                    _forward(model, inputs)
+                    outputs = _forward(model, inputs)
+                    if self.backward is not None:
+                        _backward(self.backward, outputs, batch)
             result = self.analyzer.to_dict()
         finally:
+            if self.compute_gradients:
+                model.zero_grad(set_to_none=True)
+                _restore_gradients(model, saved_gradients)
             self.analyzer.enabled = was_enabled
             model.train(was_training)
 
@@ -155,6 +177,24 @@ def _forward(model, inputs):
     if isinstance(inputs, dict):
         return model(**inputs)
     return model(inputs)
+
+
+def _backward(backward, outputs, batch):
+    result = backward(outputs, batch)
+    if torch.is_tensor(result):
+        result.backward()
+
+
+def _save_gradients(model):
+    return [
+        None if parameter.grad is None else parameter.grad.detach().clone()
+        for parameter in model.parameters()
+    ]
+
+
+def _restore_gradients(model, gradients):
+    for parameter, gradient in zip(model.parameters(), gradients):
+        parameter.grad = gradient
 
 
 def _epoch(state, event):
