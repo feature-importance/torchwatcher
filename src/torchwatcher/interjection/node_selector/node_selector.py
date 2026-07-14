@@ -414,6 +414,98 @@ def select_all(
     return node_selector
 
 
+def _matching_nodes(
+        graph_module: GraphModule,
+        node_selector: NodeSelector
+) -> list[Node]:
+    return [
+        node
+        for node in graph_module.graph.nodes
+        if node_selector.fn((graph_module, node))
+    ]
+
+
+def nth(
+        node_selector: NodeSelector,
+        index: int
+) -> NodeSelector:
+    """Selects the nth node matched by the given selector.
+
+    The index is over matching nodes only, not over all nodes in the graph.
+    Negative indices count from the end, matching Python sequence indexing.
+
+    Args:
+      node_selector (NodeSelector):
+        The node selector to index into.
+      index (int):
+        The match index to select.
+
+    Returns:
+      NodeSelector:
+        A new node selector that selects the indexed match, or no nodes if the
+        index is out of range.
+    """
+
+    def _select(nodestate: NodeState) -> bool:
+        graph_module, current_node = nodestate
+        matches = _matching_nodes(graph_module, node_selector)
+
+        try:
+            return current_node is matches[index]
+        except IndexError:
+            return False
+
+    return NodeSelector(_select)
+
+
+def first(
+        node_selector: NodeSelector
+) -> NodeSelector:
+    """Selects the first node matched by the given selector."""
+    return nth(node_selector, 0)
+
+
+def last(
+        node_selector: NodeSelector
+) -> NodeSelector:
+    """Selects the last node matched by the given selector."""
+    return nth(node_selector, -1)
+
+
+def match_slice(
+        node_selector: NodeSelector,
+        start: int | None = None,
+        stop: int | None = None,
+        step: int | None = None
+) -> NodeSelector:
+    """Selects a slice of the nodes matched by the given selector.
+
+    Args:
+      node_selector (NodeSelector):
+        The node selector to slice.
+      start (int | None):
+        The start index of the match slice.
+      stop (int | None):
+        The stop index of the match slice.
+      step (int | None):
+        The step of the match slice.
+
+    Returns:
+      NodeSelector:
+        A new node selector that selects all matches in the requested slice.
+    """
+
+    match_slice_ = slice(start, stop, step)
+
+    def _select(nodestate: NodeState) -> bool:
+        graph_module, current_node = nodestate
+        matches = _matching_nodes(graph_module, node_selector)
+
+        return any(current_node is node for node in matches[match_slice_])
+
+    return NodeSelector(_select)
+
+
 # Node selector constructors:
 
 def node_lambda(
