@@ -1,5 +1,5 @@
-from .callbacks import AnalyzerEvaluation
+from .callbacks import AnalyserEvaluation
 
 __all__ = [
-    "AnalyzerEvaluation",
+    "AnalyserEvaluation",
 ]

@@ -6,11 +6,11 @@ from torch import nn, Tensor
 from torch.optim.optimizer import ParamsT, Optimizer
 from torchbearer import Metric, MetricList
 
-from .analysis import Analyzer, AnalyzerState
+from .analysis import Analyser, AnalyserState
 
 DEFAULT_METRICS = ['acc']
 
-class LinearProbe(Analyzer):
+class LinearProbe(Analyser):
     def __init__(self,
                  num_classes: int,
                  partial_optim: Callable[[ParamsT], Optimizer] = None,
@@ -20,7 +20,7 @@ class LinearProbe(Analyzer):
 
         self.num_classes = num_classes
         self.probes = nn.ModuleDict()
-        self.optimizers = {}
+        self.optimisers = {}
         self.partial_optim = partial_optim
         self.criterion = criterion
         self.metrics = MetricList(metrics if metrics is not None
@@ -31,12 +31,12 @@ class LinearProbe(Analyzer):
 
         probe_name = f"{name.replace(".", "_")}_probe"
         self.probes[probe_name] = nn.LazyLinear(self.num_classes)
-        self.optimizers[name] = self.partial_optim(
+        self.optimisers[name] = self.partial_optim(
             self.probes[probe_name].parameters())
 
     def process_batch_state(self,
                             name: str,
-                            state: AnalyzerState,
+                            state: AnalyserState,
                             working_results: Metric | None):
 
         probe_name = f"{name.replace(".", "_")}_probe"
@@ -77,10 +77,10 @@ class LinearProbe(Analyzer):
 
     def train_step(self):
         for name in self.working_results.keys():
-            optimizer = self.optimizers[name]
-            optimizer.zero_grad()
+            optimiser = self.optimisers[name]
+            optimiser.zero_grad()
             predictions = self.working_results[name]
             loss = self.criterion(predictions, self.targets)
             loss.backward()
-            optimizer.step()
+            optimiser.step()
 

@@ -4,7 +4,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torchvision.datasets import CIFAR10
 
-from torchwatcher.analysis.analysis import Analyzer
+from torchwatcher.analysis.analysis import Analyser
 from torchwatcher.interjection import interject_by_match, node_selector
 from torchwatcher.nn import GradientIdentity
 
@@ -17,7 +17,7 @@ loader = DataLoader(data, batch_size=8, shuffle=False, num_workers=0)
 
 
 # Create a class to record feature maps
-class FeatureMapTracker(Analyzer):
+class FeatureMapTracker(Analyser):
     def __init__(self):
         super().__init__(gradient=False)
 

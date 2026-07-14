@@ -1,6 +1,6 @@
 import torch
 
-from .analysis import Analyzer, AnalyzerState
+from .analysis import Analyser, AnalyserState
 from .running_stats import Variance
 
 
@@ -11,7 +11,7 @@ class _FeatureStatistics:
         self.feature_activations = Variance()
 
 
-class FeatureStatistics(Analyzer[_FeatureStatistics]):
+class FeatureStatistics(Analyser[_FeatureStatistics]):
     """
     Compute basic statistics of feature maps, including mean and variance of
     per-feature activations, per-channel activations, and the channel sparsity.
@@ -19,7 +19,7 @@ class FeatureStatistics(Analyzer[_FeatureStatistics]):
     def __init__(self):
         super().__init__()
 
-    def process_batch_state(self, name: str, state: AnalyzerState,
+    def process_batch_state(self, name: str, state: AnalyserState,
                             working_results: _FeatureStatistics | None) \
             -> _FeatureStatistics:
         features = state.outputs

@@ -1,9 +1,9 @@
 import torch
 
-from torchwatcher.analysis.analysis import (Analyzer)
+from torchwatcher.analysis.analysis import (Analyser)
 
 
-class DeadReLU(Analyzer[torch.Tensor]):
+class DeadReLU(Analyser[torch.Tensor]):
     """
     Track the number of dead ReLU (or other saturating) activations over
     batches of data.

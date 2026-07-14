@@ -21,12 +21,12 @@ class NoGradException(Exception):
     def __init__(self):
         super().__init__("Gradients has not been set; either you are trying "
                          "to access them before calling the model's backwards "
-                         "or the Analyzer instance you're using did not enable "
+                         "or the Analyser instance you're using did not enable "
                          "gradient tracking.")
 
 
-class AnalyzerState():
-    """State held by an analyzer and used to update the results of the
+class AnalyserState():
+    """State held by an analyser and used to update the results of the
     analysis."""
 
     def __init__(self):
@@ -81,37 +81,37 @@ class AnalyzerState():
 
 
 class FInter(WrappedForwardInterjection):
-    def __init__(self, analyzer):
+    def __init__(self, analyser):
         super().__init__()
         # store the ref to the inter in a tuple to stop it being registered
         # otherwise we'll have cyclic dependencies
-        self._analyzer = (analyzer,)
+        self._analyser = (analyser,)
 
     def process(self, name, module, inputs, outputs):
-        self._analyzer[0].log_forward(name, module, inputs, outputs)
+        self._analyser[0].log_forward(name, module, inputs, outputs)
 
 
 class FBInter(WrappedForwardBackwardInterjection):
-    def __init__(self, analyzer):
+    def __init__(self, analyser):
         super().__init__()
         # store the ref to the inter in a tuple to stop it being registered
         # otherwise we'll have cyclic dependencies
-        self._analyzer = (analyzer,)
+        self._analyser = (analyser,)
 
     def process(self, name, module, inputs, outputs):
-        self._analyzer[0].log_forward(name, module, inputs, outputs)
+        self._analyser[0].log_forward(name, module, inputs, outputs)
 
     def process_backward(self, name, module, grad_input, grad_output):
-        self._analyzer[0].log_backward(name, module, grad_input, grad_output)
+        self._analyser[0].log_backward(name, module, grad_input, grad_output)
 
 
-class Analyzer[T](WrappedForwardInterjection):
-    """Abstract base class for analyzer implementations."""
+class Analyser[T](WrappedForwardInterjection):
+    """Abstract base class for analyser implementations."""
 
     def __init__(self, gradient=False):
         super().__init__()
 
-        self.current_states: dict[str, AnalyzerState] = {}
+        self.current_states: dict[str, AnalyserState] = {}
         self.working_results: dict[str, Any] = {}
 
         self.gradient = gradient
@@ -123,7 +123,7 @@ class Analyzer[T](WrappedForwardInterjection):
         self._targets = None
         self._targets_set = False
 
-        self._enabled = True  # allow Analyzer to be disabled
+        self._enabled = True  # allow Analyser to be disabled
 
     @property
     def enabled(self):
@@ -153,7 +153,7 @@ class Analyzer[T](WrappedForwardInterjection):
         self.interjection.process(name, module, inputs, outputs)
 
     def log_forward(self, name, module, inputs, outputs):
-        s = self.current_states[name] = AnalyzerState()
+        s = self.current_states[name] = AnalyserState()
         s._name = name
         s._module = module
         s._inputs = inputs
@@ -186,7 +186,7 @@ class Analyzer[T](WrappedForwardInterjection):
         self._targets = targets
         self._targets_set = True
 
-    def finalize_state(self, state: AnalyzerState):
+    def finalize_state(self, state: AnalyserState):
         # only if enabled do the updates
         if not self.enabled:
             return
@@ -205,7 +205,7 @@ class Analyzer[T](WrappedForwardInterjection):
     @abc.abstractmethod
     def process_batch_state(self,
                             name: str,
-                            state: AnalyzerState,
+                            state: AnalyserState,
                             working_results: T | None) -> T | None:
         pass
 
@@ -219,74 +219,74 @@ class Analyzer[T](WrappedForwardInterjection):
         }
 
 
-class AnalyzerList(Analyzer[Any]):
-    """Wraps multiple analyzers into a single analyzer."""
+class AnalyserList(Analyser[Any]):
+    """Wraps multiple analysers into a single analyser."""
 
-    def __init__(self, *args: Analyzer):
+    def __init__(self, *args: Analyser):
         super().__init__()
-        self.analyzers = nn.ModuleList(args)
+        self.analysers = nn.ModuleList(args)
 
     def log_forward(self, name, module, inputs, outputs):
-        for analyzer in self.analyzers:
+        for analyser in self.analysers:
             # just do this here rather than changing the setter. Don't think
             # it will cause problems.
             if self._targets_set:
-                analyzer.targets = self.targets
+                analyser.targets = self.targets
 
-            analyzer.log_forward(name, module, inputs, outputs)
+            analyser.log_forward(name, module, inputs, outputs)
 
     def log_backward(self, name, module, grad_input, grad_output):
-        for analyzer in self.analyzers:
-            analyzer.log_backward(name, module, grad_input, grad_output)
+        for analyser in self.analysers:
+            analyser.log_backward(name, module, grad_input, grad_output)
 
     def process_batch_state(self,
                             name: str,
-                            state: AnalyzerState,
+                            state: AnalyserState,
                             working_results: Any | None):
         pass
 
-    @Analyzer.enabled.setter
+    @Analyser.enabled.setter
     def enabled(self, value: bool):
         self._enabled = value
         # also update children so their own logic respects the flag
-        for analyzer in self.analyzers:
-            analyzer.enabled = value
+        for analyser in self.analysers:
+            analyser.enabled = value
 
     def to_dict(self) -> dict:
         result = dict()
 
-        for analyzer in self.analyzers:
-            clz = type(analyzer).__name__
+        for analyser in self.analysers:
+            clz = type(analyser).__name__
 
-            if (isinstance(analyzer, PerClassAnalyzer) and
-                    hasattr(analyzer, 'analyzer')):
-                clz = 'PerClass' + type(analyzer.analyzer).__name__
+            if (isinstance(analyser, PerClassAnalyser) and
+                    hasattr(analyser, 'analyser')):
+                clz = 'PerClass' + type(analyser.analyser).__name__
 
-            for k, v in analyzer.to_dict().items():
+            for k, v in analyser.to_dict().items():
                 result[f"{clz}.{k}"] = v
 
         return result
 
     def register(self, name, module):
         super().register(name, module)
-        for analyzer in self.analyzers:
-            analyzer.register(name, module)
+        for analyser in self.analysers:
+            analyser.register(name, module)
 
     def reset(self):
         super().reset()
-        for analyzer in self.analyzers:
-            analyzer.reset()
+        for analyser in self.analysers:
+            analyser.reset()
 
 
-class PerClassAnalyzer(Analyzer[Any]):
-    """Wraps an Analyzer so that it tracks statistics separately for each
+class PerClassAnalyser(Analyser[Any]):
+    """Wraps an Analyser so that it tracks statistics separately for each
      class."""
 
-    def __init__(self, analyzer):
-        super().__init__(gradient=analyzer.gradient)
+    def __init__(self, analyser):
+        super().__init__(gradient=analyser.gradient)
 
-        self.analyzer = analyzer
-        self.analyzers = {}
+        self.analyser = analyser
+        self.analysers = {}
 
     def log_forward(self, name, module, inputs, outputs):
         if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):
@@ -298,12 +298,12 @@ class PerClassAnalyzer(Analyzer[Any]):
             if isinstance(c, torch.Tensor) and c.numel() == 1:
                 c = c.cpu().item()
 
-            if c not in self.analyzers:
-                self.analyzers[c] = copy.deepcopy(self.analyzer)
+            if c not in self.analysers:
+                self.analysers[c] = copy.deepcopy(self.analyser)
 
-            analyzer = self.analyzers[c]
-            analyzer.targets = self.targets[classes == c]
-            analyzer.log_forward(name,
+            analyser = self.analysers[c]
+            analyser.targets = self.targets[classes == c]
+            analyser.log_forward(name,
                                  module,
                                  inputs[classes == c],
                                  outputs[classes == c])
@@ -311,64 +311,64 @@ class PerClassAnalyzer(Analyzer[Any]):
     def log_backward(self, name, module, grad_input, grad_output):
         classes = self.targets
 
-        for c, analyzer in self.analyzers.items():
-            analyzer.log_backward(name, module, grad_input[classes == c],
+        for c, analyser in self.analysers.items():
+            analyser.log_backward(name, module, grad_input[classes == c],
                                   grad_output[classes == c])
 
     def process_batch_state(self,
                             name: str,
-                            state: AnalyzerState,
+                            state: AnalyserState,
                             working_results: Any | None):
         pass
 
     def to_dict(self) -> dict:
         result = dict()
-        for c in self.analyzers.keys():
-            r = self.analyzers[c].to_dict()
+        for c in self.analysers.keys():
+            r = self.analysers[c].to_dict()
             result[c] = r
 
         return result
 
 
-class PerClassVersusAnalyzer(PerClassAnalyzer):
-    """Wraps an Analyzer so that it tracks statistics separately for each class
+class PerClassVersusAnalyser(PerClassAnalyser):
+    """Wraps an Analyser so that it tracks statistics separately for each class
     and "not" each class.
     """
 
-    def __init__(self, analyzer):
-        super().__init__(analyzer)
+    def __init__(self, analyser):
+        super().__init__(analyser)
 
     def log_forward(self, name, module, inputs, outputs):
         classes = self.targets
 
         for c in classes.unique():
-            if c not in self.analyzers:
-                self.analyzers[c] = copy.deepcopy(self.analyzer)
-                self.analyzers[f"~{c}"] = copy.deepcopy(self.analyzer)
+            if c not in self.analysers:
+                self.analysers[c] = copy.deepcopy(self.analyser)
+                self.analysers[f"~{c}"] = copy.deepcopy(self.analyser)
 
-            analyzer = self.analyzers[c]
-            analyzer.targets = self.targets[classes == c]
-            analyzer.log_forward(name, module, inputs[classes == c],
+            analyser = self.analysers[c]
+            analyser.targets = self.targets[classes == c]
+            analyser.log_forward(name, module, inputs[classes == c],
                                  outputs[classes == c])
 
-            analyzer = self.analyzers[f"~{c}"]
-            analyzer.targets = self.targets[classes != c]
-            analyzer.log_forward(name, module, inputs[classes != c],
+            analyser = self.analysers[f"~{c}"]
+            analyser.targets = self.targets[classes != c]
+            analyser.log_forward(name, module, inputs[classes != c],
                                  outputs[classes != c])
 
     def log_backward(self, name, module, grad_input, grad_output):
         classes = self.targets
 
-        for c, analyzer in self.analyzers.items():
+        for c, analyser in self.analysers.items():
             if "~" in str(c):
-                analyzer.log_backward(name, module, grad_input[classes != c],
+                analyser.log_backward(name, module, grad_input[classes != c],
                                       grad_output[classes != c])
             else:
-                analyzer.log_backward(name, module, grad_input[classes == c],
+                analyser.log_backward(name, module, grad_input[classes == c],
                                       grad_output[classes == c])
 
 
-class NameAnalyzer(Analyzer[str]):
+class NameAnalyser(Analyser[str]):
     """Just logs the layer name(s)"""
 
     def process_batch_state(self, name, state, result):

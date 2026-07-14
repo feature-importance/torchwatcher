@@ -3,7 +3,7 @@ from typing import Any
 import torch
 from torch.linalg import LinAlgError, matrix_rank
 
-from .analysis import Analyzer, AnalyzerState
+from .analysis import Analyser, AnalyserState
 from .running_stats import Covariance
 
 
@@ -84,7 +84,7 @@ def compute_cov_spectrum_stats(covariance: torch.Tensor,
     return stats
 
 
-class RankAnalyzer(Analyzer):
+class RankAnalyser(Analyser):
     def __init__(self, mode='aTa',
                  n=8000,
                  threshold=1e-3):
@@ -98,7 +98,7 @@ class RankAnalyzer(Analyzer):
 
     def process_batch_state(self,
                             name: str,
-                            state: AnalyzerState,
+                            state: AnalyserState,
                             working_results: Covariance | None) -> Covariance:
         if working_results is None:
             working_results = Covariance()
@@ -133,12 +133,12 @@ class RankAnalyzer(Analyzer):
             return {}
 
 
-class LayerWeightRankAnalyser(RankAnalyzer):
+class LayerWeightRankAnalyser(RankAnalyser):
     def __init__(self, mode='aTa', n=8000, threshold=1e-3):
         super().__init__(mode, n, threshold)
         self.w_rank = None
 
-    def process_batch_state(self, name: str, state: AnalyzerState,
+    def process_batch_state(self, name: str, state: AnalyserState,
                             working_results: Any | None):
         if (state.module is not None and hasattr(state.module, 'weight') and
                 working_results is None):
@@ -150,7 +150,7 @@ class LayerWeightRankAnalyser(RankAnalyzer):
         return working_results
 
 
-class CovarianceSpectrumStatisticsAnalyser(RankAnalyzer):
+class CovarianceSpectrumStatisticsAnalyser(RankAnalyser):
     def __init__(self, n=8000, threshold=1e-3, taps=10):
         super().__init__(n=n, threshold=threshold)
         self.taps = taps

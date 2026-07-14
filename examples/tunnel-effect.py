@@ -47,10 +47,10 @@ def _(mo):
     ## What this notebook does
 
     Rather than re-implementing the instrumentation by hand, we use
-    `torchwatcher` to *interject* analyzers into the pretrained model:
+    `torchwatcher` to *interject* analysers into the pretrained model:
 
     1. Load a CIFAR-10 pretrained VGG19 and its matching preprocessing.
-    2. Attach a `RankAnalyzer` and a `LinearProbe` to every ReLU activation
+    2. Attach a `RankAnalyser` and a `LinearProbe` to every ReLU activation
        using `interject_by_match`.
     3. Run data through the (frozen) backbone to (a) collect per-layer feature
        ranks and (b) train and evaluate one linear probe per layer.
@@ -72,20 +72,20 @@ def _():
 
     from model_utilities.models.cifar_vgg import vgg19, VGG19_Weights
 
-    from torchwatcher.analysis.analysis import AnalyzerList
+    from torchwatcher.analysis.analysis import AnalyserList
     from torchwatcher.analysis.linear_probe import LinearProbe
-    from torchwatcher.analysis.rank import RankAnalyzer
+    from torchwatcher.analysis.rank import RankAnalyser
     from torchwatcher.interjection import interject_by_match, node_selector
 
     from tqdm import tqdm
 
     return (
-        AnalyzerList,
+        AnalyserList,
         CIFAR10,
         DataLoader,
         LinearProbe,
         Path,
-        RankAnalyzer,
+        RankAnalyser,
         Subset,
         VGG19_Weights,
         interject_by_match,
@@ -195,38 +195,38 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Attach the analyzers
+    ## Attach the analysers
 
     Here is the core of the `torchwatcher` workflow. We instantiate the two
-    analyzers — a `RankAnalyzer` to estimate per-layer feature rank and a
+    analysers — a `RankAnalyser` to estimate per-layer feature rank and a
     `LinearProbe` (one 10-class linear classifier per layer) — and combine them
-    in an `AnalyzerList` so they observe the *same* forward pass.
+    in an `AnalyserList` so they observe the *same* forward pass.
 
     `interject_by_match` then rewrites the model so that every node matching
-    `node_selector.Activations.is_relu` is observed by the analyzers. The
+    `node_selector.Activations.is_relu` is observed by the analysers. The
     returned `watched_model` behaves exactly like the original VGG19 on the
     forward pass, but each ReLU output is now intercepted and fed to the
-    analyzers, giving us the 18 measurement points used in Figure 1.
+    analysers, giving us the 18 measurement points used in Figure 1.
     """)
     return
 
 
 @app.cell
 def _(
-    AnalyzerList,
+    AnalyserList,
     DEVICE,
     LinearProbe,
     PROBE_LR,
     RANK_FEATURE_DIM,
     RANK_THRESHOLD,
-    RankAnalyzer,
+    RankAnalyser,
     interject_by_match,
     model,
     nn,
     node_selector,
     torch,
 ):
-    rank_collector = RankAnalyzer(
+    rank_collector = RankAnalyser(
         n=RANK_FEATURE_DIM,
         threshold=RANK_THRESHOLD,
     )
@@ -235,14 +235,14 @@ def _(
         partial_optim=lambda params: torch.optim.Adam(params, lr=PROBE_LR),
         criterion=nn.CrossEntropyLoss(),
     )
-    analyzer = AnalyzerList(rank_collector, probe_trainer)
+    analyser = AnalyserList(rank_collector, probe_trainer)
 
     watched_model = interject_by_match(
         model,
         node_selector.Activations.is_relu,
-        analyzer,
+        analyser,
     ).to(DEVICE)
-    return analyzer, probe_trainer, rank_collector, watched_model
+    return analyser, probe_trainer, rank_collector, watched_model
 
 
 @app.cell(hide_code=True)
@@ -250,13 +250,13 @@ def _(mo):
     mo.md(r"""
     ## Run the experiment
 
-    With the analyzers attached we can drive the whole measurement pipeline.
+    With the analysers attached we can drive the whole measurement pipeline.
     The backbone is always kept frozen and in `eval` mode; the
-    `set_analyzers` helper just toggles which analyzer is active and whether
+    `set_analysers` helper just toggles which analyser is active and whether
     the probes are in train or eval mode for a given pass:
 
     1. **`train_probes`** — for each batch, runs a forward pass, sets the
-       targets on the analyzer, and takes a `train_step` so every layer's linear
+       targets on the analyser, and takes a `train_step` so every layer's linear
        probe learns to classify from that layer's representation. Crucially the
        probes are trained on detached features, so no gradients flow back into
        the backbone.
@@ -276,7 +276,7 @@ def _(mo):
 def _(
     DEVICE,
     PROBE_EPOCHS,
-    analyzer,
+    analyser,
     mo,
     probe_trainer,
     rank_collector,
@@ -286,15 +286,15 @@ def _(
     train_loader,
     watched_model,
 ):
-    def set_analyzers(*, rank_enabled, probe_enabled, training):
-        analyzer.train(training)
-        analyzer.enabled = (rank_enabled or probe_enabled)
+    def set_analysers(*, rank_enabled, probe_enabled, training):
+        analyser.train(training)
+        analyser.enabled = (rank_enabled or probe_enabled)
         rank_collector.enabled = rank_enabled
         probe_trainer.enabled = probe_enabled
 
     def train_probes():
         watched_model.eval()
-        set_analyzers(
+        set_analysers(
             rank_enabled=False,
             probe_enabled=True,
             training=True,
@@ -309,12 +309,12 @@ def _(
                 probe_trainer.train_step()
 
     def evaluate_final_model():
-        set_analyzers(
+        set_analysers(
             rank_enabled=True,
             probe_enabled=True,
             training=False,
         )
-        analyzer.reset()    
+        analyser.reset()    
         watched_model.eval()
 
         correct = 0

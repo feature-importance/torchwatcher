@@ -183,7 +183,7 @@ watched_model = interject_by_name(
 ```
 
 A convenient way to discover names is to trace the model or attach a
-`NameAnalyzer` while developing. The graph visualizer in the
+`NameAnalyser` while developing. The graph visualiser in the
 `torchwatcher.drawing` package can also be used to inspect the graph as an image
 with the node names shown; see [Drawing model graphs](#drawing-model-graphs).
 
@@ -303,71 +303,71 @@ SVG or PNG requires Graphviz to be available on your system.
 
 ## High-level APIs: Analysis and logging
 
-Analyzers are higher-level interjections for collecting statistics from selected
-points in a model. An analyzer is inserted into the graph like any other
+Analysers are higher-level interjections for collecting statistics from selected
+points in a model. An analyser is inserted into the graph like any other
 interjection, but instead of modifying values it accumulates per-node results
 across batches.
 
 ```python
-from torchwatcher.analysis.rank import RankAnalyzer
+from torchwatcher.analysis.rank import RankAnalyser
 from torchwatcher.interjection import interject_by_match, node_selector
 
-rank_analyzer = RankAnalyzer(n=4096, threshold=1e-3)
+rank_analyser = RankAnalyser(n=4096, threshold=1e-3)
 
 watched_model = interject_by_match(
     model,
     node_selector.Activations.is_relu,
-    rank_analyzer,
+    rank_analyser,
 )
 
 for inputs, targets in loader:
     watched_model(inputs)
 
-results = rank_analyzer.to_dict()
+results = rank_analyser.to_dict()
 ```
 
 `to_dict()` returns a dictionary keyed by graph node name. The value for each
-node is analyzer-specific. For example, `RankAnalyzer` reports values such as
+node is analyser-specific. For example, `RankAnalyser` reports values such as
 `features_rank`, `features_dim`, and `normalized_features_rank`.
 
-Analyzers can be disabled when they are attached to a model but should not run
+Analysers can be disabled when they are attached to a model but should not run
 on every forward pass:
 
 ```python
-rank_analyzer.enabled = False
+rank_analyser.enabled = False
 ```
 
-### Evaluating analyzers during training
+### Evaluating analysers during training
 
-`AnalyzerEvaluation` is a Torchbearer callback helper for taking analyzer
-snapshots during training. It temporarily resets and enables the analyzer, runs
-a fixed loader with the model in eval mode, stores the analyzer result, and then
-restores the previous analyzer and model training state. Snapshot passes run
+`AnalyserEvaluation` is a Torchbearer callback helper for taking analyser
+snapshots during training. It temporarily resets and enables the analyser, runs
+a fixed loader with the model in eval mode, stores the analyser result, and then
+restores the previous analyser and model training state. Snapshot passes run
 with gradient computation disabled by default.
 
 ```python
 import torchbearer
-from torchwatcher.analysis.rank import RankAnalyzer
+from torchwatcher.analysis.rank import RankAnalyser
 from torchwatcher.interjection import interject_by_match, node_selector
-from torchwatcher.training import AnalyzerEvaluation
+from torchwatcher.training import AnalyserEvaluation
 
-rank_analyzer = RankAnalyzer(n=4096, threshold=1e-3)
-rank_analyzer.enabled = False
+rank_analyser = RankAnalyser(n=4096, threshold=1e-3)
+rank_analyser.enabled = False
 
 watched_model = interject_by_match(
     model,
     node_selector.Activations.is_relu,
-    rank_analyzer,
+    rank_analyser,
 )
 
-rank_evaluation = AnalyzerEvaluation(
-    rank_analyzer,
+rank_evaluation = AnalyserEvaluation(
+    rank_analyser,
     rank_loader,
 )
 
 trial = torchbearer.Trial(
     watched_model,
-    optimizer,
+    optimiser,
     criterion,
     metrics=["loss", "acc"],
     callbacks=[
@@ -393,7 +393,7 @@ Each record has the following structure:
     "epoch": <int>,
     "batch": <int or None>,
     "global_step": <int>,
-    "result": <analyzer.to_dict()>,
+    "result": <analyser.to_dict()>,
 }
 ```
 
@@ -401,8 +401,8 @@ For custom batches, pass `prepare_inputs` to control how batches are moved to
 the model device and passed into the model.
 
 ```python
-evaluation = AnalyzerEvaluation(
-    analyzer,
+evaluation = AnalyserEvaluation(
+    analyser,
     eval_loader,
     prepare_inputs=lambda batch, device: {
         "input_ids": batch["input_ids"].to(device),
@@ -411,20 +411,20 @@ evaluation = AnalyzerEvaluation(
 )
 ```
 
-For analyzers that need gradients, pass `compute_gradients=True`. If the
-analyzer needs a backward pass, also pass a `backward` callback. The callback is
+For analysers that need gradients, pass `compute_gradients=True`. If the
+analyser needs a backward pass, also pass a `backward` callback. The callback is
 called with the model outputs and the original batch. It can either perform
 backward itself or return a tensor to be backpropagated.
 
 ```python
-gradient_evaluation = AnalyzerEvaluation(
-    gradient_analyzer,
+gradient_evaluation = AnalyserEvaluation(
+    gradient_analyser,
     eval_loader,
     compute_gradients=True,
     backward=lambda outputs, batch: outputs.sum(),
 )
 ```
 
-`AnalyzerEvaluation` preserves any parameter gradients that existed before a
+`AnalyserEvaluation` preserves any parameter gradients that existed before a
 gradient-enabled snapshot and restores them afterward, so evaluation gradients
 do not leak into the surrounding training loop.

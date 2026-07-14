@@ -45,10 +45,10 @@ def _(model):
     from torch import nn
     from torchwatcher.interjection import interject_by_match, node_selector
     from torchwatcher.nn import GradientIdentity
-    from torchwatcher.analysis.analysis import Analyzer
+    from torchwatcher.analysis.analysis import Analyser
 
     # Create a class to record gradients 
-    class GradTracker(Analyzer):
+    class GradTracker(Analyser):
         def __init__(self):
             super().__init__(gradient=True)
 

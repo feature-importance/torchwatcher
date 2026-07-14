@@ -1,1 +1,1 @@
-from .analysis import Analyzer, AnalyzerList, NameAnalyzer
+from .analysis import Analyser, AnalyserList, NameAnalyser

@@ -16,20 +16,20 @@ def _():
     from model_utilities.models.cifar_resnet import resnet18_3x3, ResNet18_3x3_Weights 
     from model_utilities.datasets import cifar10_loaders
 
-    from torchwatcher.analysis.analysis import Analyzer, AnalyzerState, PerClassAnalyzer
+    from torchwatcher.analysis.analysis import Analyser, AnalyserState, PerClassAnalyser
     from torchwatcher.analysis.running_stats import Variance
     from torchwatcher.interjection import interject_by_match
     from torchwatcher.interjection.node_selector import is_activation
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    class GradientAccumulationAnalyzer(Analyzer):
+    class GradientAccumulationAnalyser(Analyser):
         def __init__(self):
             super().__init__(gradient=True)
 
         def process_batch_state(self,
                             name: str,
-                            state: AnalyzerState,
+                            state: AnalyserState,
                             working_results: Variance | None) -> Variance:
             if working_results is None:
                 working_results = Variance()
@@ -46,9 +46,9 @@ def _():
             return rec
 
     return (
-        GradientAccumulationAnalyzer,
+        GradientAccumulationAnalyser,
         Path,
-        PerClassAnalyzer,
+        PerClassAnalyser,
         ResNet18_3x3_Weights,
         cifar10_loaders,
         device,
@@ -62,40 +62,40 @@ def _():
 
 @app.cell
 def _(
-    GradientAccumulationAnalyzer,
-    PerClassAnalyzer,
+    GradientAccumulationAnalyser,
+    PerClassAnalyser,
     ResNet18_3x3_Weights,
     device,
     interject_by_match,
     is_activation,
     resnet18_3x3,
 ):
-    grad_analyzer = GradientAccumulationAnalyzer()
-    analyzer = PerClassAnalyzer(grad_analyzer)
+    grad_analyser = GradientAccumulationAnalyser()
+    analyser = PerClassAnalyser(grad_analyser)
     model = resnet18_3x3(weights=ResNet18_3x3_Weights.CIFAR10_s0)
-    imodel = interject_by_match(model, is_activation, analyzer).to(device)
-    return analyzer, imodel
+    imodel = interject_by_match(model, is_activation, analyser).to(device)
+    return analyser, imodel
 
 
 @app.cell
-def _(Path, analyzer, cifar10_loaders, device, imodel, torch):
+def _(Path, analyser, cifar10_loaders, device, imodel, torch):
     train_loader, val_loader = cifar10_loaders(Path('~/data/').expanduser(), batch_size=4)
     loss = torch.nn.CrossEntropyLoss()
 
     for x, y in val_loader:
         y = y.to(device)
-        analyzer.targets = y
+        analyser.targets = y
         pred = imodel(x.to(device))
         loss(pred, y).backward() 
         break
 
-    print(analyzer.to_dict())
+    print(analyser.to_dict())
     return
 
 
 @app.cell
-def _(analyzer):
-    analyzer.to_dict()[0]['layer4.1.relu_1']["var"].shape
+def _(analyser):
+    analyser.to_dict()[0]['layer4.1.relu_1']["var"].shape
     return
 
 

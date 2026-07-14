@@ -9,19 +9,19 @@ from torchbearer.callbacks import Callback
 _GLOBAL_STEP = torchbearer.StateKey("torchwatcher.global_step")
 
 
-class AnalyzerEvaluation(Callback):
-    """Evaluate an analyzer over a loader during Torchbearer training.
+class AnalyserEvaluation(Callback):
+    """Evaluate an analyser over a loader during Torchbearer training.
 
     Use ``callbacks`` to attach the evaluation on a fixed period or any
     ``model_utilities.utils.callbacks.at_training_iterations`` schedule. By
     default, snapshot passes run with gradient computation disabled. Set
-    ``compute_gradients=True`` and optionally provide ``backward`` for analyzers
+    ``compute_gradients=True`` and optionally provide ``backward`` for analysers
     that need a backward pass.
     """
 
     def __init__(
         self,
-        analyzer,
+        analyser,
         loader,
         *,
         prepare_inputs: Callable[[Any, torch.device], Any] | None = None,
@@ -35,7 +35,7 @@ class AnalyzerEvaluation(Callback):
                 "compute_gradients must be True when backward is provided"
             )
 
-        self.analyzer = analyzer
+        self.analyser = analyser
         self.loader = loader
         self.prepare_inputs = prepare_inputs or _default_inputs
         self.compute_gradients = compute_gradients
@@ -63,13 +63,13 @@ class AnalyzerEvaluation(Callback):
 
         callbacks = []
         if include_start:
-            callbacks.append(_RecordAnalyzerEvaluation(self, "start"))
+            callbacks.append(_RecordAnalyserEvaluation(self, "start"))
 
         callbacks.append(_TrainingIterationCounter())
         callbacks.append(at_training_iterations(schedule)(self))
 
         if include_end:
-            callbacks.append(_RecordAnalyzerEvaluation(self, "end"))
+            callbacks.append(_RecordAnalyserEvaluation(self, "end"))
 
         return callbacks
 
@@ -84,13 +84,13 @@ class AnalyzerEvaluation(Callback):
         model = state[torchbearer.MODEL]
         device = next(model.parameters()).device
         was_training = model.training
-        was_enabled = self.analyzer.enabled
+        was_enabled = self.analyser.enabled
         saved_gradients = (
             _save_gradients(model) if self.compute_gradients else None
         )
 
-        self.analyzer.reset()
-        self.analyzer.enabled = True
+        self.analyser.reset()
+        self.analyser.enabled = True
         model.eval()
 
         try:
@@ -102,12 +102,12 @@ class AnalyzerEvaluation(Callback):
                     outputs = _forward(model, inputs)
                     if self.backward is not None:
                         _backward(self.backward, outputs, batch)
-            result = self.analyzer.to_dict()
+            result = self.analyser.to_dict()
         finally:
             if self.compute_gradients:
                 model.zero_grad(set_to_none=True)
                 _restore_gradients(model, saved_gradients)
-            self.analyzer.enabled = was_enabled
+            self.analyser.enabled = was_enabled
             model.train(was_training)
 
         if global_step is None:
@@ -125,8 +125,8 @@ class AnalyzerEvaluation(Callback):
         return record
 
 
-class _RecordAnalyzerEvaluation(Callback):
-    def __init__(self, evaluation: AnalyzerEvaluation, event: str):
+class _RecordAnalyserEvaluation(Callback):
+    def __init__(self, evaluation: AnalyserEvaluation, event: str):
         super().__init__()
         self.evaluation = evaluation
         self.event = event

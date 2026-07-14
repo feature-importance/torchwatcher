@@ -20,7 +20,7 @@ def _(mo):
     representations changes while a CIFAR-10 model is being trained.
 
     The setup is intentionally close to the tunnel-effect example: we attach a
-    `RankAnalyzer` to every ReLU activation with `torchwatcher`, run images
+    `RankAnalyser` to every ReLU activation with `torchwatcher`, run images
     through the watched model, and plot the resulting per-layer ranks. The main
     difference is that the model is not frozen. We train a CIFAR-appropriate ResNet-18
     (`resnet18_3x3` from `model-utilities`) and take rank snapshots every few
@@ -45,14 +45,14 @@ def _():
     from model_utilities.models.cifar_resnet import resnet18_3x3
     from model_utilities.training.modelfitting import get_device, set_seed
 
-    from torchwatcher.analysis.rank import RankAnalyzer
+    from torchwatcher.analysis.rank import RankAnalyser
     from torchwatcher.interjection import interject_by_match, node_selector
-    from torchwatcher.training import AnalyzerEvaluation
+    from torchwatcher.training import AnalyserEvaluation
 
     return (
-        AnalyzerEvaluation,
+        AnalyserEvaluation,
         Path,
-        RankAnalyzer,
+        RankAnalyser,
         cifar10_loaders,
         functools,
         get_device,
@@ -139,7 +139,7 @@ def _(mo):
     ## Attach rank tracking
 
     `interject_by_match` rewrites the model so that every ReLU output is passed
-    to the rank analyzer. We keep the analyzer disabled during optimisation and
+    to the rank analyser. We keep the analyser disabled during optimisation and
     enable it only during snapshot passes, so the training steps stay ordinary
     PyTorch training steps.
     """)
@@ -154,7 +154,7 @@ def _(
     MOMENTUM,
     RANK_FEATURE_DIM,
     RANK_THRESHOLD,
-    RankAnalyzer,
+    RankAnalyser,
     WEIGHT_DECAY,
     functools,
     get_device,
@@ -171,13 +171,13 @@ def _(
 
     model = resnet18_3x3(weights=None, num_classes=10).to(device)
 
-    rank_collector = RankAnalyzer(n=RANK_FEATURE_DIM, threshold=RANK_THRESHOLD)
+    rank_collector = RankAnalyser(n=RANK_FEATURE_DIM, threshold=RANK_THRESHOLD)
     rank_collector.enabled = False
 
     watched_model = interject_by_match(model, node_selector.Activations.is_relu, rank_collector).to(device)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(watched_model.parameters(), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
+    optimiser = torch.optim.SGD(watched_model.parameters(), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
 
     scheduler = functools.partial(torch.optim.lr_scheduler.CosineAnnealingLR, T_max=EPOCHS)
     lr_callback = torchbearer.callbacks.TorchScheduler(scheduler)
@@ -185,7 +185,7 @@ def _(
         criterion,
         device,
         lr_callback,
-        optimizer,
+        optimiser,
         rank_collector,
         watched_model,
     )
@@ -197,9 +197,9 @@ def _(mo):
     ## Train and snapshot
 
     The training itself is a plain Torchbearer `Trial`. A torchwatcher
-    `AnalyzerEvaluation` handles the analyzer housekeeping: it resets and
-    enables the rank analyzer, runs the fixed loader with the model in eval
-    mode, stores the analyzer's native result, and then restores training
+    `AnalyserEvaluation` handles the analyser housekeeping: it resets and
+    enables the rank analyser, runs the fixed loader with the model in eval
+    mode, stores the analyser's native result, and then restores training
     state. Behind the scenes, timing is delegated to the callback helpers from
     `model-utilities`. Marimo's persistent cache wraps the experiment so
     rerunning the notebook can restore the rank snapshots directly.
@@ -209,14 +209,14 @@ def _(mo):
 
 @app.cell
 def _(
-    AnalyzerEvaluation,
+    AnalyserEvaluation,
     EPOCHS,
     RANK_EVERY_N_BATCHES,
     criterion,
     device,
     lr_callback,
     mo,
-    optimizer,
+    optimiser,
     rank_collector,
     rank_loader,
     torchbearer,
@@ -224,14 +224,14 @@ def _(
     watched_model,
 ):
     def train_and_measure():
-        rank_evaluation = AnalyzerEvaluation(
+        rank_evaluation = AnalyserEvaluation(
             rank_collector,
             rank_loader,
         )
 
         trial = torchbearer.Trial(
             watched_model,
-            optimizer,
+            optimiser,
             criterion,
             metrics=["loss", "acc", "lr"],
             callbacks=[

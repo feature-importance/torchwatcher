@@ -3,10 +3,10 @@ import torchbearer
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from torchwatcher.training import AnalyzerEvaluation
+from torchwatcher.training import AnalyserEvaluation
 
 
-class FakeAnalyzer:
+class FakeAnalyser:
     def __init__(self, result=None):
         self.enabled = False
         self.reset_count = 0
@@ -30,15 +30,15 @@ class RecordingModel(nn.Module):
         return self.linear(x)
 
 
-def test_analyzer_evaluation_records_and_restores_state():
+def test_analyser_evaluation_records_and_restores_state():
     model = RecordingModel()
     model.train()
-    analyzer = FakeAnalyzer()
+    analyser = FakeAnalyser()
     loader = DataLoader(
         TensorDataset(torch.randn(2, 2), torch.ones(2)),
         batch_size=1,
     )
-    evaluation = AnalyzerEvaluation(analyzer, loader)
+    evaluation = AnalyserEvaluation(analyser, loader)
     state = {
         torchbearer.MODEL: model,
         torchbearer.EPOCH: 0,
@@ -48,8 +48,8 @@ def test_analyzer_evaluation_records_and_restores_state():
     record = evaluation.record(state, event="batch", global_step=2)
 
     assert model.training
-    assert not analyzer.enabled
-    assert analyzer.reset_count == 1
+    assert not analyser.enabled
+    assert analyser.reset_count == 1
     assert model.calls == [
         (False, False, model.linear.weight.device),
         (False, False, model.linear.weight.device),
@@ -63,15 +63,15 @@ def test_analyzer_evaluation_records_and_restores_state():
     }
 
 
-def test_analyzer_evaluation_can_enable_gradient_computation():
+def test_analyser_evaluation_can_enable_gradient_computation():
     model = RecordingModel()
-    analyzer = FakeAnalyzer()
+    analyser = FakeAnalyser()
     loader = DataLoader(
         TensorDataset(torch.randn(2, 2), torch.ones(2)),
         batch_size=1,
     )
-    evaluation = AnalyzerEvaluation(
-        analyzer,
+    evaluation = AnalyserEvaluation(
+        analyser,
         loader,
         compute_gradients=True,
     )
@@ -86,11 +86,11 @@ def test_analyzer_evaluation_can_enable_gradient_computation():
     assert model.linear.weight.grad is None
 
 
-def test_analyzer_evaluation_runs_optional_backward_callback():
+def test_analyser_evaluation_runs_optional_backward_callback():
     model = RecordingModel()
     original_weight_grad = torch.ones_like(model.linear.weight)
     model.linear.weight.grad = original_weight_grad.clone()
-    analyzer = FakeAnalyzer()
+    analyser = FakeAnalyser()
     loader = DataLoader(
         TensorDataset(torch.randn(2, 2), torch.ones(2)),
         batch_size=1,
@@ -101,8 +101,8 @@ def test_analyzer_evaluation_runs_optional_backward_callback():
         backward_calls.append(batch)
         return outputs.sum()
 
-    evaluation = AnalyzerEvaluation(
-        analyzer,
+    evaluation = AnalyserEvaluation(
+        analyser,
         loader,
         compute_gradients=True,
         backward=backward,
@@ -115,25 +115,25 @@ def test_analyzer_evaluation_runs_optional_backward_callback():
     assert torch.equal(model.linear.weight.grad, original_weight_grad)
 
 
-def test_analyzer_evaluation_rejects_backward_without_gradients():
+def test_analyser_evaluation_rejects_backward_without_gradients():
     loader = DataLoader(
         TensorDataset(torch.randn(1, 2), torch.ones(1)),
         batch_size=1,
     )
 
     try:
-        AnalyzerEvaluation(
-            FakeAnalyzer(),
+        AnalyserEvaluation(
+            FakeAnalyser(),
             loader,
             backward=lambda outputs, batch: outputs.sum(),
         )
     except ValueError as exc:
         assert "compute_gradients" in str(exc)
     else:
-        raise AssertionError("AnalyzerEvaluation accepted backward without gradients")
+        raise AssertionError("AnalyserEvaluation accepted backward without gradients")
 
 
-def test_analyzer_evaluation_composes_with_model_utilities_schedule():
+def test_analyser_evaluation_composes_with_model_utilities_schedule():
     model = RecordingModel()
     train_loader = DataLoader(
         TensorDataset(torch.randn(4, 2), torch.zeros(4, 1)),
@@ -143,7 +143,7 @@ def test_analyzer_evaluation_composes_with_model_utilities_schedule():
         TensorDataset(torch.randn(1, 2), torch.tensor([0])),
         batch_size=1,
     )
-    evaluation = AnalyzerEvaluation(FakeAnalyzer(), eval_loader)
+    evaluation = AnalyserEvaluation(FakeAnalyser(), eval_loader)
     trial = torchbearer.Trial(
         model,
         torch.optim.SGD(model.parameters(), lr=0.01),
@@ -167,7 +167,7 @@ def test_analyzer_evaluation_composes_with_model_utilities_schedule():
     assert [record["global_step"] for record in evaluation.records] == [0, 1, 2]
 
 
-def test_analyzer_evaluation_accepts_arbitrary_training_iteration_schedule():
+def test_analyser_evaluation_accepts_arbitrary_training_iteration_schedule():
     model = RecordingModel()
     train_loader = DataLoader(
         TensorDataset(torch.randn(6, 2), torch.zeros(6, 1)),
@@ -177,7 +177,7 @@ def test_analyzer_evaluation_accepts_arbitrary_training_iteration_schedule():
         TensorDataset(torch.randn(1, 2), torch.tensor([0])),
         batch_size=1,
     )
-    evaluation = AnalyzerEvaluation(FakeAnalyzer(), eval_loader)
+    evaluation = AnalyserEvaluation(FakeAnalyser(), eval_loader)
     trial = torchbearer.Trial(
         model,
         torch.optim.SGD(model.parameters(), lr=0.01),
