@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.14"
+__generated_with = "0.23.11"
 app = marimo.App(width="medium")
 
 
@@ -8,10 +8,20 @@ app = marimo.App(width="medium")
 def _():
     import marimo as mo
 
+    import torch
+    import torch.nn as nn
+
+    from pathlib import Path
+
+    from model_utilities.models.cifar_resnet import resnet18_3x3, ResNet18_3x3_Weights 
+    from model_utilities.datasets import cifar10_loaders
+
     from torchwatcher.analysis.analysis import Analyzer, AnalyzerState, PerClassAnalyzer
     from torchwatcher.analysis.running_stats import Variance
     from torchwatcher.interjection import interject_by_match
     from torchwatcher.interjection.node_selector import is_activation
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     class GradientAccumulationAnalyzer(Analyzer):
         def __init__(self):
@@ -35,12 +45,18 @@ def _():
             rec['mean'] = result.mean()
             return rec
 
-
     return (
         GradientAccumulationAnalyzer,
+        Path,
         PerClassAnalyzer,
+        ResNet18_3x3_Weights,
+        cifar10_loaders,
+        device,
         interject_by_match,
         is_activation,
+        mo,
+        resnet18_3x3,
+        torch,
     )
 
 
@@ -48,57 +64,51 @@ def _():
 def _(
     GradientAccumulationAnalyzer,
     PerClassAnalyzer,
+    ResNet18_3x3_Weights,
+    device,
     interject_by_match,
     is_activation,
+    resnet18_3x3,
 ):
-    from model_utilities.models.cifar_resnet import resnet18_3x3, ResNet18_3x3_Weights 
     grad_analyzer = GradientAccumulationAnalyzer()
     analyzer = PerClassAnalyzer(grad_analyzer)
     model = resnet18_3x3(weights=ResNet18_3x3_Weights.CIFAR10_s0)
-    imodel = interject_by_match(model, is_activation, analyzer).to("cuda:0")
-
+    imodel = interject_by_match(model, is_activation, analyzer).to(device)
     return analyzer, imodel
 
 
 @app.cell
-def _(analyzer, imodel):
-    from model_utilities.datasets import cifar10_loaders
-    import torch
-
-    train_loader, val_loader = cifar10_loaders('/home/am1g15/data/cifar10', batch_size=4)
+def _(Path, analyzer, cifar10_loaders, device, imodel, torch):
+    train_loader, val_loader = cifar10_loaders(Path('~/data/').expanduser(), batch_size=4)
     loss = torch.nn.CrossEntropyLoss()
 
     for x, y in val_loader:
-        y = y.to("cuda:0")
+        y = y.to(device)
         analyzer.targets = y
-        pred = imodel(x.to("cuda:0"))
-        loss(pred, y).backward()    
-
-        print(analyzer.to_dict())
+        pred = imodel(x.to(device))
+        loss(pred, y).backward() 
         break
 
-
-    
+    print(analyzer.to_dict())
     return
 
 
 @app.cell
 def _(analyzer):
-    analyzer.analyzers[list(analyzer.analyzers.keys())[0]].working_results
+    analyzer.to_dict()[0]['layer4.1.relu_1']["var"].shape
     return
 
 
 @app.cell
-def _(analyzer):
-    analyzer.to_dict()['layer4.1.relu_1']["var"].shape
+def _(imodel, mo, torch):
+    from torchwatcher.drawing import draw_graph_pretty
+
+    mo.Html(draw_graph_pretty(imodel, torch.empty(1,3,32,32)).create_svg().decode())
     return
 
 
 @app.cell
-def _(imodel):
-    from torchwatcher.drawing import draw_graph
-
-    draw_graph(imodel)
+def _():
     return
 
 

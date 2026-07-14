@@ -8,6 +8,7 @@ import torch
 from torch.fx.passes.graph_drawer import FxGraphDrawer, _WEIGHT_TEMPLATE, _COLOR_MAP, _HASH_COLOR_MAP
 from torch.fx.passes.shape_prop import TensorMetadata
 from torchwatcher.analysis import Analyzer
+from torchwatcher.analysis.analysis import PerClassAnalyzer
 from torchwatcher.interjection.tracing import DualGraphModule, trace_shapes, ShapeProp
 from torchwatcher.interjection import WrappedForwardInterjection, ForwardInterjection
 
@@ -33,7 +34,7 @@ def compact_list_repr(x: list[Any]) -> str:
 
 class SubmoduleFxGraphDrawer(FxGraphDrawer):
     """
-    FxGraphDrawer extended to show the submodules of the original code as traced by the torchwatcher.
+    FxGraphDrawer extended to show the submodules of the original code as traced by torchwatcher.
     """
 
     def _get_node_style(self, node: torch.fx.Node) -> dict[str, str]:
@@ -117,10 +118,10 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
             if isWrapped:
                 dot_node = pydot.Cluster(
                     name + "/" + node.name,
-                    # label=node.name,
-                    label=self._get_node_label(
-                        graph_module, node, skip_node_names_in_args, parse_stack_trace
-                    ),
+                    label=node.name + "\n" + str(type(md))[8:-2],
+                    # label=self._get_node_label(
+                    #     graph_module, node, skip_node_names_in_args, parse_stack_trace
+                    # ),
                     fillcolor='MistyRose1',
                     penwidth= "1",
                     style= "solid,filled",
@@ -135,7 +136,8 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
 
                 wrapped_nodes.add(node)
 
-                ShapeProp(gm).propagate(torch.empty(node.meta['tensor_meta'].shape))
+                if 'tensor_meta' in node.meta:
+                    ShapeProp(gm).propagate(torch.empty(node.meta['tensor_meta'].shape))
                 for n in gm.graph.nodes:
                     if n.op != 'placeholder' and n.op != 'output':
                         dot_node.add_node(pydot.Node(name + "/" + node.name+"/"+n.name,
@@ -400,7 +402,7 @@ def draw_graph(
         skip_node_names_in_args: bool = True,
         parse_stack_trace: bool = False,
         dot_graph_shape: Optional[str] = None,
-        normalize_args: bool = False):
+        normalize_args: bool = False) -> pydot.Dot:
 
     return SubmoduleFxGraphDrawer(module.graphmodule, module.__class__.__name__, ignore_getattr,
                                   ignore_parameters_and_buffers, skip_node_names_in_args,
@@ -413,7 +415,7 @@ def draw_graph_pretty(
         show_shapes: bool = True,
         show_node_names: bool = False,
         show_extra_info: bool = False,
-        ):
+        ) -> pydot.Dot:
     if show_shapes:
         trace_shapes(module, *inputs)
 

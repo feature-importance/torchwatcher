@@ -283,15 +283,21 @@ class PerClassAnalyzer(Analyzer[Any]):
      class."""
 
     def __init__(self, analyzer):
-        super().__init__()
+        super().__init__(gradient=analyzer.gradient)
 
         self.analyzer = analyzer
         self.analyzers = {}
 
     def log_forward(self, name, module, inputs, outputs):
+        if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):
+            return
+
         classes = self.targets
 
         for c in classes.unique():
+            if isinstance(c, torch.Tensor) and c.numel() == 1:
+                c = c.cpu().item()
+
             if c not in self.analyzers:
                 self.analyzers[c] = copy.deepcopy(self.analyzer)
 
@@ -317,11 +323,9 @@ class PerClassAnalyzer(Analyzer[Any]):
 
     def to_dict(self) -> dict:
         result = dict()
-
         for c in self.analyzers.keys():
             r = self.analyzers[c].to_dict()
-            for k, v in r.items():
-                result[f"{k}_{c}"] = v
+            result[c] = r
 
         return result
 
