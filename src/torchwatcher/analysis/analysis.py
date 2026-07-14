@@ -55,7 +55,7 @@ class AnalyserState():
 
     @property
     def input_gradients(self):
-        if self._input_gradients is None:
+        if self._input_gradients_set:
             return self._input_gradients
         raise NoGradException()
 

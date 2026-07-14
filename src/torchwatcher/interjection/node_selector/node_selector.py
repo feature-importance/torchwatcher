@@ -128,8 +128,7 @@ class NodeSelector:
 
     def __invert__(
             # Arguments:
-            self: Self,
-            other: NodeSelector
+            self: Self
     ) -> NodeSelector:
         """Logical inversion.
 

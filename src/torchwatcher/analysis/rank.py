@@ -156,10 +156,10 @@ class CovarianceSpectrumStatisticsAnalyser(RankAnalyser):
         self.taps = taps
 
     def finalise_result(self, name, result) -> dict:
-        stats = compute_cov_spectrum_stats(self.covar.covariance(),
+        stats = compute_cov_spectrum_stats(result.covariance(),
                                            threshold=self.threshold,
                                            taps=self.taps)
-        stats['features_dim'] = self.features_dim
+        stats['features_dim'] = self.features_dim[name]
 
         norm = min(self.features_dim[name], self.n)
         stats['normalized_features_rank'] = stats['features_rank'] / norm
