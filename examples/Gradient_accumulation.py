@@ -83,6 +83,7 @@ def _(Path, analyser, cifar10_loaders, device, imodel, torch):
     loss = torch.nn.CrossEntropyLoss()
 
     for x, y in val_loader:
+        print("HERE")
         y = y.to(device)
         analyser.targets = y
         pred = imodel(x.to(device))
