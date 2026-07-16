@@ -191,7 +191,6 @@ class Analyser[T](WrappedForwardInterjection):
         if not self.enabled:
             return
 
-        print(state.name)
         name = state.name
         del self.current_states[name]
 
