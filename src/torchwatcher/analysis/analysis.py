@@ -191,6 +191,7 @@ class Analyser[T](WrappedForwardInterjection):
         if not self.enabled:
             return
 
+        print(state.name)
         name = state.name
         del self.current_states[name]
 
@@ -199,8 +200,7 @@ class Analyser[T](WrappedForwardInterjection):
         else:
             working = None
 
-        self.working_results[name] = self.process_batch_state(name, state,
-                                                              working)
+        self.working_results[name] = self.process_batch_state(name, state, working)
 
     @abc.abstractmethod
     def process_batch_state(self,
@@ -312,8 +312,9 @@ class PerClassAnalyser(Analyser[Any]):
         classes = self.targets
 
         for c, analyser in self.analysers.items():
-            analyser.log_backward(name, module, grad_input[classes == c],
-                                  grad_output[classes == c])
+            if torch.any(classes == c):  # only call if there is data in this batch for this class
+                analyser.log_backward(name, module, grad_input[classes == c],
+                                      grad_output[classes == c])
 
     def process_batch_state(self,
                             name: str,
