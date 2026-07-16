@@ -1,0 +1,134 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.23.14",
+    "script_metadata_hash": null
+  },
+  "cells": [
+    {
+      "id": "Hbol",
+      "code_hash": "1d0db38904205bec4d6f6f6a1f6cec3e",
+      "outputs": [],
+      "console": []
+    },
+    {
+      "id": "MJUe",
+      "code_hash": "769cd42f8edf35233e6589c75ea41502",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"rank-evolution-during-training\">Rank evolution during training</h1>\n<span class=\"paragraph\">This notebook tracks how the numerical rank of intermediate feature\nrepresentations changes while a CIFAR-10 model is being trained.</span>\n<span class=\"paragraph\">The setup is intentionally close to the tunnel-effect example: we attach a\n<code>RankAnalyzer</code> to every ReLU activation with <code>torchwatcher</code>, run images\nthrough the watched model, and plot the resulting per-layer ranks. The main\ndifference is that the model is not frozen. We train a CIFAR-appropriate ResNet-18\n(<code>resnet18_3x3</code> from <code>model-utilities</code>) and take rank snapshots every few\nbatches, because the representation geometry often moves fastest at the\nstart of optimisation.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "vblA",
+      "code_hash": "6ab067a37df967bc8bbff23b860c6a51",
+      "outputs": [],
+      "console": []
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "307edfa5041be5e4cf18ed67b7f578c3",
+      "outputs": [],
+      "console": []
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "186f860f8f83805738439cd05787c464",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"load-cifar-10\">Load CIFAR-10</h2>\n<span class=\"paragraph\">The <code>cifar10_loaders</code> from <code>model-utilities</code> creates train and validation loaders with the standard\nCIFAR-10 transforms. The sample caps keep the notebook useful for quick\ndemos while making it easy to scale back up.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "PKri",
+      "code_hash": "f24c83302d56bc2a5e9450bd68127ab5",
+      "outputs": [],
+      "console": []
+    },
+    {
+      "id": "Xref",
+      "code_hash": "e85dd4404fdb90b53453fcfacdf018d7",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"attach-rank-tracking\">Attach rank tracking</h2>\n<span class=\"paragraph\"><code>interject_by_match</code> rewrites the model so that every ReLU output is passed\nto the rank analyzer. We keep the analyzer disabled during optimisation and\nenable it only during snapshot passes, so the training steps stay ordinary\nPyTorch training steps.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "SFPL",
+      "code_hash": "df4a91a1141e32935dcca743cd4bd492",
+      "outputs": [],
+      "console": []
+    },
+    {
+      "id": "BYtC",
+      "code_hash": "fc0b7a5bf1ec4ea5211f450bc536cd34",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"train-and-snapshot\">Train and snapshot</h2>\n<span class=\"paragraph\">The training itself is a plain Torchbearer <code>Trial</code>. A torchwatcher\n<code>AnalyzerEvaluation</code> handles the analyzer housekeeping: it resets and\nenables the rank analyzer, runs the fixed loader with the model in eval\nmode, stores the analyzer's native result, and then restores training\nstate. Behind the scenes, timing is delegated to the callback helpers from\n<code>model-utilities</code>. Marimo's persistent cache wraps the experiment so\nrerunning the notebook can restore the rank snapshots directly.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "RGSE",
+      "code_hash": "e1d6ee1b796ba146b0ad307891446e0d",
+      "outputs": [],
+      "console": []
+    },
+    {
+      "id": "Kclp",
+      "code_hash": "92e5bf7bb9f2c137e9b2a1ad8d888488",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"plot-rank-evolution\">Plot rank evolution</h2>\n<span class=\"paragraph\">The heatmap gives a compact overview of when each layer's representation\nrank changes. The line plot below it shows selected snapshots across depth,\nwhich is often easier to read for the first few training updates.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "emfo",
+      "code_hash": "05e4f808997f823efdd03d7b10cfe0f6",
+      "outputs": [],
+      "console": []
+    },
+    {
+      "id": "Hstk",
+      "code_hash": "585511660b9fd8744ef41980bca07d04",
+      "outputs": [],
+      "console": []
+    },
+    {
+      "id": "nWHF",
+      "code_hash": "7534311ffa0f2dc9253f28af2f590d1a",
+      "outputs": [],
+      "console": []
+    },
+    {
+      "id": "iLit",
+      "code_hash": "1bfda7c134b1999ab880915201c9e6bb",
+      "outputs": [],
+      "console": []
+    }
+  ]
+}

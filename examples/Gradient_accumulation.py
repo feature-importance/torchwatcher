@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.11"
+__generated_with = "0.23.14"
 app = marimo.App(width="medium")
 
 
@@ -23,27 +23,28 @@ def _():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    class GradientAccumulationAnalyser(Analyser):
-        def __init__(self):
-            super().__init__(gradient=True)
+    # class GradientAccumulationAnalyser(Analyser):
+    #     def __init__(self):
+    #         super().__init__(gradient=True)
 
-        def process_batch_state(self,
-                            name: str,
-                            state: AnalyserState,
-                            working_results: Variance | None) -> Variance:
-            if working_results is None:
-                working_results = Variance()
+    #     def process_batch_state(self,
+    #                         name: str,
+    #                         state: AnalyserState,
+    #                         working_results: Variance | None) -> Variance:
+    #         if working_results is None:
+    #             working_results = Variance()
 
-            gradients = state.output_gradients.mean(dim=(-2,-1))
-            working_results.add(gradients)
+    #         gradients = state.output_gradients.mean(dim=(-2,-1))
+    #         working_results.add(gradients)
 
-            return working_results
+    #         return working_results
 
-        def finalise_result(self, name: str, result: Variance) -> dict:
-            rec = dict()
-            rec['var'] = result.variance()
-            rec['mean'] = result.mean()
-            return rec
+    #     def finalise_result(self, name: str, result: Variance) -> dict:
+    #         rec = dict()
+    #         rec['var'] = result.variance()
+    #         rec['mean'] = result.mean()
+    #         return rec
+    from torchwatcher.analysis.gradients import GradientAccumulationAnalyser
 
     return (
         GradientAccumulationAnalyser,
@@ -54,7 +55,6 @@ def _():
         device,
         interject_by_match,
         is_activation,
-        mo,
         resnet18_3x3,
         torch,
     )
@@ -95,15 +95,7 @@ def _(Path, analyser, cifar10_loaders, device, imodel, torch):
 
 @app.cell
 def _(analyser):
-    analyser.to_dict()[0]['layer4.1.relu_1']["var"].shape
-    return
-
-
-@app.cell
-def _(imodel, mo, torch):
-    from torchwatcher.drawing import draw_graph_pretty
-
-    mo.Html(draw_graph_pretty(imodel, torch.empty(1,3,32,32)).create_svg().decode())
+    analyser.to_dict()#['layer4.1.relu_1']["var"].shape
     return
 
 
