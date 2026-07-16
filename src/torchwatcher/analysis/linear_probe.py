@@ -5,10 +5,62 @@ import torchbearer
 from torch import nn, Tensor
 from torch.optim.optimizer import ParamsT, Optimizer
 from torchbearer import Metric, MetricList
+from torchbearer.callbacks import Callback
 
 from .analysis import Analyser, AnalyserState
 
 DEFAULT_METRICS = ['acc']
+
+
+class LinearProbeCallback(Callback):
+    """Torchbearer callback for driving a :class:`LinearProbe`.
+
+    The callback copies the current batch targets from Torchbearer's state onto
+    the probe before each forward pass. During training it can also step the
+    probe optimisers after the watched model has populated the probe logits.
+    """
+
+    def __init__(self,
+                 probe: "LinearProbe",
+                 *,
+                 train_probes: bool = True,
+                 target_key=torchbearer.TARGET,
+                 keep_model_eval: bool = False):
+        super().__init__()
+        if train_probes and probe.criterion is None:
+            raise ValueError(
+                "LinearProbeCallback requires a criterion to train probes"
+            )
+
+        self.probe = probe
+        self.train_probes = train_probes
+        self.target_key = target_key
+        self.keep_model_eval = keep_model_eval
+
+    def on_start(self, state):
+        if self.keep_model_eval:
+            state[torchbearer.MODEL].eval()
+
+    def on_start_training(self, state):
+        if self.keep_model_eval:
+            state[torchbearer.MODEL].eval()
+        self.probe.train()
+
+    def on_sample(self, state):
+        self.probe.reset()
+        self.probe.targets = state[self.target_key]
+
+    def on_step_training(self, state):
+        if self.train_probes:
+            self.probe.train_step()
+
+    def on_start_validation(self, state):
+        self.probe.eval()
+        self.probe.reset()
+
+    def on_sample_validation(self, state):
+        self.probe.targets = state[self.target_key]
+
 
 class LinearProbe(Analyser):
     def __init__(self,
@@ -25,6 +77,18 @@ class LinearProbe(Analyser):
         self.criterion = criterion
         self.metrics = MetricList(metrics if metrics is not None
                                   else DEFAULT_METRICS)
+
+    def callback(self,
+                 *,
+                 train_probes: bool = True,
+                 target_key=torchbearer.TARGET,
+                 keep_model_eval: bool = False) -> LinearProbeCallback:
+        return LinearProbeCallback(
+            self,
+            train_probes=train_probes,
+            target_key=target_key,
+            keep_model_eval=keep_model_eval,
+        )
 
     def register(self, name, module):
         super().register(name, module)
@@ -83,4 +147,3 @@ class LinearProbe(Analyser):
             loss = self.criterion(predictions, self.targets)
             loss.backward()
             optimiser.step()
-

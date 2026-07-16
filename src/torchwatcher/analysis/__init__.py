@@ -10,7 +10,7 @@ from .analysis import (
 )
 from .basic_statistics import FeatureStatistics
 from .dead_relus import DeadReLU
-from .linear_probe import LinearProbe
+from .linear_probe import LinearProbe, LinearProbeCallback
 from .rank import (
     CovarianceSpectrumStatisticsAnalyser,
     LayerWeightRankAnalyser,
@@ -58,6 +58,7 @@ __all__ = [
     "IoU",
     "LayerWeightRankAnalyser",
     "LinearProbe",
+    "LinearProbeCallback",
     "Mean",
     "NameAnalyser",
     "NoGradException",

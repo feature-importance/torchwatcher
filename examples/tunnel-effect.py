@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.21.1"
+__generated_with = "0.23.11"
 app = marimo.App(width="medium")
 
 
@@ -66,10 +66,10 @@ def _():
 
     import matplotlib.pyplot as plt
     import torch
+    import torchbearer
     from torch import nn
-    from torch.utils.data import DataLoader, Subset
-    from torchvision.datasets import CIFAR10
 
+    from model_utilities.datasets import cifar10_loaders
     from model_utilities.models.cifar_vgg import vgg19, VGG19_Weights
 
     from torchwatcher.analysis.analysis import AnalyserList
@@ -77,23 +77,19 @@ def _():
     from torchwatcher.analysis.rank import RankAnalyser
     from torchwatcher.interjection import interject_by_match, node_selector
 
-    from tqdm import tqdm
-
     return (
         AnalyserList,
-        CIFAR10,
-        DataLoader,
         LinearProbe,
         Path,
         RankAnalyser,
-        Subset,
         VGG19_Weights,
+        cifar10_loaders,
         interject_by_match,
         nn,
         node_selector,
         plt,
         torch,
-        tqdm,
+        torchbearer,
         vgg19,
     )
 
@@ -105,11 +101,11 @@ def _(Path, torch):
     DATA_ROOT = Path("~/data").expanduser()
 
     TRAIN_SAMPLE_CAP = 2048
-    TEST_SAMPLE_CAP = 10000
+    TEST_SAMPLE_CAP = 1000 #10000
     BATCH_SIZE = 64
     PROBE_EPOCHS = 8
     PROBE_LR = 1e-3
-    RANK_FEATURE_DIM = 8000
+    RANK_FEATURE_DIM = 1000 #8000
     RANK_THRESHOLD = 1e-3
     TUNNEL_ACC_FRACTION = 0.95
     NUM_WORKERS = 0
@@ -137,11 +133,10 @@ def _(mo):
 
     We load the CIFAR-10 pretrained VGG19 (seed-0 weights) and use the
     preprocessing transforms that ship with those weights, so the inputs match
-    what the network saw during training. The CIFAR-10 train and test splits
-    are then wrapped in `Subset`s (respecting the sample caps above) and served
-    through `DataLoader`s — the train loader feeds probe training, the test
-    loader is used for rank collection, probe evaluation, and the final
-    accuracy check.
+    what the network saw during training. The `cifar10_loaders` helper from
+    `model-utilities` constructs capped train and test loaders for us — the
+    train loader feeds probe training, the test loader is used for rank
+    collection, probe evaluation, and the final accuracy check.
     """)
     return
 
@@ -149,15 +144,13 @@ def _(mo):
 @app.cell
 def _(
     BATCH_SIZE,
-    CIFAR10,
     DATA_ROOT,
     DEVICE,
-    DataLoader,
     NUM_WORKERS,
-    Subset,
     TEST_SAMPLE_CAP,
     TRAIN_SAMPLE_CAP,
     VGG19_Weights,
+    cifar10_loaders,
     torch,
     vgg19,
 ):
@@ -167,27 +160,15 @@ def _(
     model = vgg19(weights=weights).to(DEVICE)
     transform = weights.transforms()
 
-    train_data = CIFAR10(DATA_ROOT, train=True, download=True, transform=transform)
-    test_data = CIFAR10(DATA_ROOT, train=False, download=True, transform=transform)
-
-    train_subset = Subset(
-        train_data, range(min(TRAIN_SAMPLE_CAP, len(train_data)))
-    )
-    test_subset = Subset(
-        test_data, range(min(TEST_SAMPLE_CAP, len(test_data)))
-    )
-
-    train_loader = DataLoader(
-        train_subset,
+    train_loader, test_loader = cifar10_loaders(
+        DATA_ROOT,
         batch_size=BATCH_SIZE,
-        shuffle=True,
+        train_sample_cap=TRAIN_SAMPLE_CAP,
+        eval_sample_cap=TEST_SAMPLE_CAP,
         num_workers=NUM_WORKERS,
-    )
-    test_loader = DataLoader(
-        test_subset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=NUM_WORKERS,
+        pin_memory=False,
+        train_transform=transform,
+        eval_transform=transform,
     )
     return model, test_loader, train_loader
 
@@ -281,8 +262,7 @@ def _(
     probe_trainer,
     rank_collector,
     test_loader,
-    torch,
-    tqdm,
+    torchbearer,
     train_loader,
     watched_model,
 ):
@@ -293,7 +273,6 @@ def _(
         probe_trainer.enabled = probe_enabled
 
     def train_probes():
-        watched_model.eval()
         set_analysers(
             rank_enabled=False,
             probe_enabled=True,
@@ -301,12 +280,13 @@ def _(
         )
 
         print("Training linear probes")
-        for _epoch in tqdm(range(PROBE_EPOCHS)):
-            for inputs, targets in train_loader:
-                probe_trainer.reset()
-                probe_trainer.targets = targets.to(DEVICE)
-                watched_model(inputs.to(DEVICE))
-                probe_trainer.train_step()
+        trial = torchbearer.Trial(
+            watched_model,
+            metrics=["acc"],
+            callbacks=[probe_trainer.callback(keep_model_eval=True)],
+        )
+        trial.with_generators(train_generator=train_loader).to(DEVICE)
+        trial.run(PROBE_EPOCHS, verbose=2)
 
     def evaluate_final_model():
         set_analysers(
@@ -315,20 +295,17 @@ def _(
             training=False,
         )
         analyser.reset()    
-        watched_model.eval()
 
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            print("Evaluating model")
-            for inputs, targets in tqdm(test_loader):
-                inputs = inputs.to(DEVICE)
-                targets = targets.to(DEVICE)
-                probe_trainer.targets = targets
-                logits = watched_model(inputs)
-                correct += (logits.argmax(dim=1) == targets).sum().item()
-                total += targets.numel()
-        return correct / total, rank_collector.to_dict(), probe_trainer.to_dict()
+        print("Evaluating model")
+        trial = torchbearer.Trial(
+            watched_model,
+            metrics=["acc"],
+            callbacks=[probe_trainer.callback(train_probes=False)],
+        )
+        trial.with_generators(val_generator=test_loader).to(DEVICE)
+        final_metrics = trial.evaluate(verbose=2)
+
+        return final_metrics["val_acc"], rank_collector.to_dict(), probe_trainer.to_dict()
 
     def run_experiment():
         train_probes()
