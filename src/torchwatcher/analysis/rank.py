@@ -103,7 +103,7 @@ class RankAnalyser(Analyser):
         if working_results is None:
             working_results = Covariance()
 
-        features = state.outputs
+        features = state.outputs.detach()
 
         f = features.view(features.shape[0], -1)
         if not name in self.indices:
