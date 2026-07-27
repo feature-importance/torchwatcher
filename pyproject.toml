@@ -9,7 +9,7 @@ dependencies = [
     "torch>=2.2.0",
     "torchbearer~=0.5.5",
     "numpy>=1.26.0",
-    'model-utilities>=0.1.0.dev',
+    'model-utilities @ git+https://github.com/feature-importance/model-utilities.git@main',
     'pydot>=4.0.0'
 ]
 requires-python = ">=3.11"
@@ -44,10 +44,10 @@ python_files = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/feature-importance/torchwather"
-Documentation = "https://github.com/feature-importance/torchwather"
-Repository = "https://github.com/feature-importance/torchwather.git"
-"Bug Tracker" = "https://github.com/feature-importance/torchwather/issues"
+Homepage = "https://github.com/feature-importance/torchwatcher"
+Documentation = "https://github.com/feature-importance/torchwatcher"
+Repository = "https://github.com/feature-importance/torchwatcher.git"
+"Bug Tracker" = "https://github.com/feature-importance/torchwatcher/issues"
 
 [tool.setuptools.dynamic]
 version = {attr = "torchwatcher.__version__"}
