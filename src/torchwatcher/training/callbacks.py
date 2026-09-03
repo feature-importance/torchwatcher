@@ -1,4 +1,5 @@
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -99,9 +100,11 @@ class AnalyserEvaluation(Callback):
                     if self.compute_gradients:
                         model.zero_grad(set_to_none=True)
                     inputs = self.prepare_inputs(batch, device)
-                    outputs = _forward(model, inputs)
-                    if self.backward is not None:
-                        _backward(self.backward, outputs, batch)
+                    batch_context = getattr(self.analyser, "batch", nullcontext)
+                    with batch_context():
+                        outputs = _forward(model, inputs)
+                        if self.backward is not None:
+                            _backward(self.backward, outputs, batch)
             result = self.analyser.to_dict()
         finally:
             if self.compute_gradients:

@@ -337,6 +337,73 @@ on every forward pass:
 rank_analyser.enabled = False
 ```
 
+### Comparing representations with CKA
+
+`LinearCKAAnalyser` is a relational analyser: it combines corresponding
+activations rather than processing each watched layer independently. Give each
+model or activation stream a source name with `watch`, and enclose forwards
+for the same input batch in `batch`.
+
+```python
+from torchwatcher.analysis import LinearCKAAnalyser
+from torchwatcher.interjection import interject_by_match, node_selector
+
+cka = LinearCKAAnalyser()
+
+watched_a = interject_by_match(
+    model_a,
+    node_selector.Activations.is_relu,
+    cka.watch("model_a"),
+)
+watched_b = interject_by_match(
+    model_b,
+    node_selector.Activations.is_relu,
+    cka.watch("model_b"),
+)
+
+for inputs, _ in loader:
+    with torch.no_grad(), cka.batch():
+        watched_a(inputs)
+        watched_b(inputs)
+
+result = cka.result("model_a", "model_b")
+print(result.row_names)
+print(result.column_names)
+print(result.values)
+```
+
+The two forwards may run in either order, but their samples must correspond in
+the same order and have the same batch size. Layers can have different feature
+dimensions. Activations are flattened after the batch dimension and only
+batch-sized Gram matrices are retained temporarily.
+
+To compare layers within one model, register only one source:
+
+```python
+cka = LinearCKAAnalyser()
+watched_model = interject_by_match(
+    model,
+    node_selector.Activations.is_relu,
+    cka.watch("model"),
+)
+
+for inputs, _ in loader:
+    with torch.no_grad(), cka.batch():
+        watched_model(inputs)
+
+result = cka.result()  # square layer-by-layer matrix
+```
+
+For nodes which return tuples or other structures, select the representation
+with a source transform:
+
+```python
+cka.watch("model", transform=lambda output: output[0])
+```
+
+Pass `debiased=True` to use the unbiased HSIC estimator; each batch must then
+contain at least four samples.
+
 ### Evaluating analysers during training
 
 `AnalyserEvaluation` is a Torchbearer callback helper for taking analyser

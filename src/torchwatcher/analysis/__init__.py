@@ -1,4 +1,6 @@
 from .analysis import (
+    AnalysisPoint,
+    AnalysisRelation,
     Analyser,
     AnalyserList,
     AnalyserState,
@@ -6,8 +8,10 @@ from .analysis import (
     NoGradException,
     PerClassAnalyser,
     PerClassVersusAnalyser,
+    RelationalAnalyser,
     TargetException,
 )
+from .cka import CKAResult, LinearCKAAnalyser
 from .basic_statistics import FeatureStatistics
 from .dead_relus import DeadReLU
 from .linear_probe import LinearProbe, LinearProbeCallback
@@ -41,6 +45,8 @@ from .running_stats import (
 )
 
 __all__ = [
+    "AnalysisPoint",
+    "AnalysisRelation",
     "Analyser",
     "AnalyserList",
     "AnalyserState",
@@ -50,6 +56,7 @@ __all__ = [
     "CovarianceSpectrumStatisticsAnalyser",
     "CrossCovariance",
     "CrossIoU",
+    "CKAResult",
     "DeadReLU",
     "FeatureStatistics",
     "FixedRandomSubsetSampler",
@@ -59,6 +66,7 @@ __all__ = [
     "LayerWeightRankAnalyser",
     "LinearProbe",
     "LinearProbeCallback",
+    "LinearCKAAnalyser",
     "Mean",
     "NameAnalyser",
     "NoGradException",
@@ -67,6 +75,7 @@ __all__ = [
     "PerClassVersusAnalyser",
     "Quantile",
     "RankAnalyser",
+    "RelationalAnalyser",
     "SecondMoment",
     "Stat",
     "TargetException",
