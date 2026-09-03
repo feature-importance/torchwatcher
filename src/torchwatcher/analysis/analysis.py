@@ -1,12 +1,13 @@
 import abc
 import copy
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
 
 from torchwatcher.interjection import WrappedForwardBackwardInterjection, \
     WrappedForwardInterjection
@@ -150,6 +151,122 @@ class Analyser[T](WrappedForwardInterjection):
         been collected.
         """
         yield
+
+    def run(
+        self,
+        model: nn.Module | Mapping[str, nn.Module],
+        data,
+        *,
+        batch_size: int | None = None,
+        prepare_inputs: (
+            Callable[[Any, torch.device], Any]
+            | Mapping[str, Callable[[Any, torch.device], Any]]
+            | None
+        ) = None,
+        prepare_targets: Callable[[Any, torch.device], Any] | None = None,
+        device: (
+            torch.device
+            | str
+            | Mapping[str, torch.device | str]
+            | None
+        ) = None,
+        reset: bool = True,
+        eval_mode: bool = True,
+        loader_kwargs: Mapping[str, Any] | None = None,
+    ) -> dict:
+        """Run watched model(s) over a dataset or dataloader.
+
+        This convenience method owns the analyser's batch boundary and
+        temporarily enables it. A regular analyser accepts one model. A
+        relational analyser additionally accepts a mapping from source names
+        to watched models, for example ``{"student": student,
+        "teacher": teacher}``.
+
+        Args:
+            model: A watched model, or a source-to-model mapping for a
+                relational analyser.
+            data: A ``DataLoader`` or a dataset from which one will be built.
+            batch_size: Batch size used when ``data`` is a dataset. Defaults to
+                32. It must not be supplied with an existing dataloader.
+            prepare_inputs: Converts ``(batch, device)`` into model inputs. A
+                source-to-callable mapping can prepare different inputs for
+                each relational source. By default, the first item of a tuple
+                or list batch is used and tensors are moved recursively.
+            prepare_targets: Optionally converts ``(batch, device)`` into
+                analyser targets. By default, the second item of a tuple or
+                list batch is used when present.
+            device: Input device, or a source-to-device mapping. By default it
+                is inferred from each model's parameters or buffers.
+            reset: Reset existing analyser results before running.
+            eval_mode: Temporarily put each model into evaluation mode.
+            loader_kwargs: Extra ``DataLoader`` arguments used only when
+                ``data`` is a dataset.
+
+        Returns:
+            The analyser's final ``to_dict()`` result.
+        """
+        if self.gradient:
+            raise ValueError(
+                "Analyser.run currently supports forward-only analysers; "
+                "gradient analysers require an explicit backward pass"
+            )
+
+        models = self._normalise_run_models(model)
+        loader = _analysis_loader(data, batch_size, loader_kwargs)
+        devices = _analysis_devices(models, device)
+        preparers = _analysis_preparers(models, prepare_inputs)
+        target_preparer = prepare_targets or _default_analysis_targets
+        target_device = next(iter(devices.values()))
+
+        was_enabled = self.enabled
+        analyser_was_training = self.training
+        training_modes = {
+            source: watched_model.training
+            for source, watched_model in models.items()
+        }
+        if reset:
+            self.reset()
+        self.enabled = True
+        if eval_mode:
+            self.eval()
+            for watched_model in models.values():
+                watched_model.eval()
+
+        try:
+            with torch.no_grad():
+                for raw_batch in loader:
+                    targets = target_preparer(raw_batch, target_device)
+                    if targets is not _NO_ANALYSIS_TARGET:
+                        self.targets = targets
+                    with self.batch():
+                        for source, watched_model in models.items():
+                            inputs = preparers[source](
+                                raw_batch,
+                                devices[source],
+                            )
+                            _analysis_forward(watched_model, inputs)
+            return self.to_dict()
+        finally:
+            self.enabled = was_enabled
+            for source, watched_model in models.items():
+                watched_model.train(training_modes[source])
+            self.train(analyser_was_training)
+
+    def _normalise_run_models(
+        self,
+        model: nn.Module | Mapping[str, nn.Module],
+    ) -> dict[str, nn.Module]:
+        if isinstance(model, Mapping):
+            models = dict(model)
+            if len(models) != 1:
+                raise ValueError(
+                    "regular analysers accept one model; multiple models "
+                    "require a RelationalAnalyser"
+                )
+        else:
+            models = {"model": model}
+        _validate_analysis_models(models)
+        return models
 
     def forward(self, name, *args):
         return self.interjection(name, *args)
@@ -366,6 +483,33 @@ class RelationalAnalyser[T](Analyser[T]):
 
     def _register_point(self, source: str, name: str):
         self._registered_points[source].add(name)
+
+    def _normalise_run_models(
+        self,
+        model: nn.Module | Mapping[str, nn.Module],
+    ) -> dict[str, nn.Module]:
+        required_sources = {
+            source for comparison in self.comparisons for source in comparison
+        }
+        if isinstance(model, Mapping):
+            models = dict(model)
+        elif len(required_sources) == 1:
+            models = {next(iter(required_sources)): model}
+        else:
+            raise ValueError(
+                "cross-source relational analysis requires a "
+                "{source: model} mapping"
+            )
+
+        _validate_analysis_models(models)
+        missing = required_sources.difference(models)
+        extra = set(models).difference(required_sources)
+        if missing or extra:
+            raise ValueError(
+                "run model sources do not match configured comparisons; "
+                f"missing={sorted(missing)}, extra={sorted(extra)}"
+            )
+        return models
 
     def register(self, name, module):
         raise RuntimeError(
@@ -679,3 +823,121 @@ class NameAnalyser(Analyser[str]):
 
     def process_batch_state(self, name, state, result):
         return name
+
+
+def _validate_analysis_models(models: Mapping[str, nn.Module]):
+    if not models:
+        raise ValueError("at least one model is required")
+    invalid = {
+        source: type(model).__name__
+        for source, model in models.items()
+        if not isinstance(source, str) or not isinstance(model, nn.Module)
+    }
+    if invalid:
+        raise TypeError(
+            "models must map string source names to nn.Module instances; "
+            f"invalid={invalid}"
+        )
+
+
+def _analysis_loader(data, batch_size, loader_kwargs):
+    kwargs = {} if loader_kwargs is None else dict(loader_kwargs)
+    if isinstance(data, DataLoader):
+        if batch_size is not None or kwargs:
+            raise ValueError(
+                "batch_size and loader_kwargs cannot be used with a DataLoader"
+            )
+        return data
+
+    if "batch_size" in kwargs:
+        if batch_size is not None:
+            raise ValueError("batch_size was provided twice")
+        batch_size = kwargs.pop("batch_size")
+    if batch_size is None:
+        batch_size = 32
+    kwargs.setdefault("shuffle", False)
+    return DataLoader(data, batch_size=batch_size, **kwargs)
+
+
+def _analysis_devices(models, device):
+    if isinstance(device, Mapping):
+        missing = set(models).difference(device)
+        extra = set(device).difference(models)
+        if missing or extra:
+            raise ValueError(
+                "device sources do not match model sources; "
+                f"missing={sorted(missing)}, extra={sorted(extra)}"
+            )
+        return {
+            source: torch.device(device[source])
+            for source in models
+        }
+    if device is not None:
+        resolved = torch.device(device)
+        return {source: resolved for source in models}
+    return {
+        source: _analysis_model_device(model)
+        for source, model in models.items()
+    }
+
+
+def _analysis_model_device(model: nn.Module) -> torch.device:
+    parameter = next(model.parameters(), None)
+    if parameter is not None:
+        return parameter.device
+    buffer = next(model.buffers(), None)
+    if buffer is not None:
+        return buffer.device
+    return torch.device("cpu")
+
+
+def _analysis_preparers(models, prepare_inputs):
+    if isinstance(prepare_inputs, Mapping):
+        missing = set(models).difference(prepare_inputs)
+        extra = set(prepare_inputs).difference(models)
+        if missing or extra:
+            raise ValueError(
+                "prepare_inputs sources do not match model sources; "
+                f"missing={sorted(missing)}, extra={sorted(extra)}"
+            )
+        return dict(prepare_inputs)
+
+    preparer = prepare_inputs or _default_analysis_inputs
+    return {source: preparer for source in models}
+
+
+def _default_analysis_inputs(batch, device):
+    inputs = batch[0] if isinstance(batch, Sequence) else batch
+    return _analysis_to_device(inputs, device)
+
+
+_NO_ANALYSIS_TARGET = object()
+
+
+def _default_analysis_targets(batch, device):
+    if isinstance(batch, Sequence) and len(batch) > 1:
+        return _analysis_to_device(batch[1], device)
+    return _NO_ANALYSIS_TARGET
+
+
+def _analysis_to_device(value, device):
+    if torch.is_tensor(value):
+        return value.to(device)
+    if isinstance(value, tuple):
+        return tuple(_analysis_to_device(item, device) for item in value)
+    if isinstance(value, list):
+        return [_analysis_to_device(item, device) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _analysis_to_device(item, device)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _analysis_forward(model, inputs):
+    if isinstance(inputs, tuple):
+        return model(*inputs)
+    if isinstance(inputs, dict):
+        return model(**inputs)
+    return model(inputs)
