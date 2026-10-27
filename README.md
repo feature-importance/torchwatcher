@@ -338,7 +338,7 @@ rank_analyser.enabled = False
 ```
 
 Forward-only analysers can drive a complete dataset or dataloader pass with
-`run` for convenience. This resets and temporarily enables the analyser, 
+`run` for convenience. This resets and temporarily enables the analyser,
 puts the watched model in evaluation mode, moves inputs to the model's device,
 and restores the previous states afterward:
 
@@ -360,6 +360,88 @@ results = rank_analyser.run(
 
 You can however just write or use your own forward (or forward-backward) logic
 if you desire.
+
+### Relational analysers
+
+A regular `Analyser` processes each watched node independently. A
+`RelationalAnalyser` instead combines observations from pairs of watched nodes,
+possibly belonging to different models. It must therefore distinguish each
+model or activation stream and know which forwards belong to the same input
+batch.
+
+Do not pass a relational analyser directly to `interject_by_match`. Create one
+source-bound interjection per model with `watch(source)`. Here
+`LinearCKAAnalyser` is a concrete example of a relational analyser:
+
+```python
+from torchwatcher.analysis import LinearCKAAnalyser
+
+analyser = LinearCKAAnalyser()
+
+watched_student = interject_by_match(
+    student,
+    student_selector,
+    analyser.watch("student"),
+)
+watched_teacher = interject_by_match(
+    teacher,
+    teacher_selector,
+    analyser.watch("teacher"),
+)
+```
+
+The source names identify the models even when their graph nodes have identical
+names. `run` accepts a mapping using those same source names and runs every
+model on each batch inside one relational transaction:
+
+```python
+results = analyser.run(
+    {
+        "student": watched_student,
+        "teacher": watched_teacher,
+    },
+    loader,
+)
+```
+
+With one watched source, the default comparison relates that source to itself.
+With two sources, the default relates the first source to the second. Explicit
+comparisons can restrict the comparison or configure more than two sources:
+
+```python
+analyser = LinearCKAAnalyser(
+    comparisons=[
+        ("student", "teacher"),
+        ("student", "student"),
+    ]
+)
+```
+
+For each configured source pair, the analyser processes all ordered pairs 
+of their selected layers (Cartesian product). Every source must observe a 
+stable set of layers across batches, and paired models must receive corresponding 
+samples. A source transform can select a tensor from structured layer output:
+
+```python
+analyser.watch("student", transform=lambda output: output.hidden_state)
+```
+
+For a custom loop, use `batch()` directly rather than `run`:
+
+```python
+for inputs, _ in loader:
+    with analyser.batch():
+        watched_student(inputs)
+        watched_teacher(inputs)
+```
+
+To implement a new relational analysis, subclass `RelationalAnalyser` and
+implement `process_batch_relation(relation, states, working_results)`. The two
+`AnalyserState` objects contain the paired node observations, while
+`working_results` contains the value returned for that relation on the previous
+batch. `prepare_state` can preprocess each observation, and
+`validate_batch_states` can validate the complete transaction before any
+relation is accumulated.
 
 ### Comparing representations with CKA
 
