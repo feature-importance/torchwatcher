@@ -244,6 +244,48 @@ callback function that is given a node in the graph and returns a new node.
 
 `replace_module_native`: 1-to-1 replacement of all modules in the model that match a given class.
 
+## Selecting model parameters
+
+Parameter selectors provide a reusable way to find model parameters by their
+qualified name, local name, owning module, or arbitrary properties. Selectors
+compose with ``&`` (and), ``|`` (or), ``^`` (exclusive or), and ``~`` (not), in
+the same way as node selectors.
+
+```python
+import torch.nn as nn
+from torchwatcher.parameters import selectors
+
+conv_weights = (
+    selectors.matches_module_class(nn.Conv2d)
+    & selectors.matches_parameter_name("weight")
+)
+
+selected = conv_weights.select(model)
+for info in selected:
+    print(info.full_name, info.parameter.shape)
+```
+
+Each result is a `ParameterInfo` containing the parameter and all of its
+`ParameterRegistration` records. Convenience properties provide the qualified
+parameter name, local name, and owning module from the first, canonical
+registration.
+Exact-name and shell-style glob selectors are available for qualified
+parameter names, module names, and local parameter names. Arbitrary predicates
+can be created with `parameter_lambda`.
+
+```python
+classifier = selectors.matches_module_name_glob("classifier*")
+trainable = selectors.requires_grad
+
+selected = (classifier & trainable).select(model)
+parameters = [info.parameter for info in selected]
+```
+
+Shared parameters are returned once. Every owning module and qualified name is
+retained in `ParameterInfo.registrations`, while `ParameterInfo.aliases`
+provides the qualified names directly. This makes selections safe to use when
+constructing optimizer parameter groups.
+
 ## Drawing model graphs
 
 The `torchwatcher.drawing` module can render traced, interjected, or rewritten
