@@ -12,6 +12,7 @@ from torchwatcher.parameters.selectors import (
     matches_module_name,
     matches_module_name_glob,
     matches_parameter_name,
+    parameters,
     select_parameters,
 )
 
@@ -81,6 +82,16 @@ def test_parameter_selectors_compose_with_boolean_operators():
         | matches_parameter_name("bias")
     )
     assert "root_parameter" not in _names(model, weight_or_bias)
+
+
+def test_all_selector_matches_every_parameter_and_composes_as_identity():
+    model = ExampleModel()
+
+    assert _names(model, selectors.all) == _names(model)
+    assert _names(
+        model,
+        selectors.all & selectors.is_weight,
+    ) == _names(model, selectors.is_weight)
 
 
 def test_name_selectors_support_exact_and_glob_matches():
@@ -177,6 +188,63 @@ def test_selector_select_is_a_convenience_for_select_parameters():
         "features.0.bias",
         "features.1.bias",
     ]
+
+
+def test_parameters_returns_selected_parameters_directly():
+    model = ExampleModel()
+    selector = matches_parameter_name("bias")
+
+    assert all(
+        actual is expected
+        for actual, expected in zip(
+            parameters(model),
+            model.parameters(),
+            strict=True,
+        )
+    )
+
+    expected = [
+        model.features[0].bias,
+        model.features[1].bias,
+    ]
+    assert all(
+        actual is expected_parameter
+        for actual, expected_parameter in zip(
+            parameters(model, selector),
+            expected,
+            strict=True,
+        )
+    )
+    assert all(
+        actual is expected_parameter
+        for actual, expected_parameter in zip(
+            selector.parameters(model),
+            expected,
+            strict=True,
+        )
+    )
+
+
+def test_selector_parameters_can_construct_an_optimizer_group():
+    model = ExampleModel()
+
+    optimizer = torch.optim.SGD(
+        selectors.is_weight.parameters(model),
+        lr=0.1,
+    )
+
+    assert all(
+        actual is expected
+        for actual, expected in zip(
+            optimizer.param_groups[0]["params"],
+            [
+                model.features[0].weight,
+                model.features[1].weight,
+                model.classifier.weight,
+            ],
+            strict=True,
+        )
+    )
 
 
 def test_selector_cannot_be_used_as_a_boolean():

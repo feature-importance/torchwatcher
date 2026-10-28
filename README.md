@@ -271,15 +271,32 @@ parameter name, local name, and owning module from the first, canonical
 registration.
 Exact-name and shell-style glob selectors are available for qualified
 parameter names, module names, and local parameter names. Arbitrary predicates
-can be created with `parameter_lambda`.
+can be created with `parameter_lambda`. Use `selectors.all` when an API requires
+a selector but every parameter should be included.
 
 ```python
 classifier = selectors.matches_module_name_glob("classifier*")
 trainable = selectors.requires_grad
 
 selected = (classifier & trainable).select(model)
-parameters = [info.parameter for info in selected]
+selected_parameters = [info.parameter for info in selected]
 ```
+
+When the metadata is not needed, use `selector.parameters(model)` to iterate
+over the `nn.Parameter` objects directly. This can be passed straight to a
+single-group optimizer:
+
+```python
+import torch
+
+optimizer = torch.optim.Adam(
+    selectors.requires_grad.parameters(model),
+    lr=1e-3,
+)
+```
+
+The equivalent function form is `parameters(model, selector)`, imported from
+`torchwatcher.parameters`. Omitting the selector returns every parameter.
 
 Shared parameters are returned once. Every owning module and qualified name is
 retained in `ParameterInfo.registrations`, while `ParameterInfo.aliases`

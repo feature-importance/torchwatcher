@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from os import linesep
-from typing import Callable, Self, Type
+from typing import Callable, Iterator, Self, Type
 
 from torch import nn
 
@@ -141,6 +141,10 @@ class ParameterSelector:
         """Select parameters from ``model`` using this selector."""
         return select_parameters(model, self)
 
+    def parameters(self, model: nn.Module) -> Iterator[nn.Parameter]:
+        """Return the parameters in ``model`` matched by this selector."""
+        return parameters(model, self)
+
 
 def parameter_lambda(fn: SelectorFunction) -> ParameterSelector:
     """Construct a parameter selector from an arbitrary predicate.
@@ -265,6 +269,29 @@ def select_parameters(
     ]
 
 
+def parameters(
+        model: nn.Module,
+        selector: ParameterSelector | None = None
+) -> Iterator[nn.Parameter]:
+    """Return an iterator over the parameters matched by ``selector``.
+
+    Parameters are returned in model traversal order and shared parameters are
+    yielded once, matching :func:`select_parameters`.
+
+    Args:
+        model: The model whose parameters should be returned.
+        selector: The selector to apply. If omitted, all parameters are
+            returned.
+
+    Returns:
+        An iterator over the selected :class:`torch.nn.Parameter` objects.
+    """
+    return (
+        parameter_info.parameter
+        for parameter_info in select_parameters(model, selector)
+    )
+
+
 def _parameter_occurrences(
         model: nn.Module
 ) -> list[tuple[nn.Parameter, ParameterRegistration]]:
@@ -287,6 +314,9 @@ def _parameter_occurrences(
     return occurrences
 
 
+all = ParameterSelector()
+"""A selector which is true for every parameter."""
+
 requires_grad = ParameterSelector(lambda info: info.parameter.requires_grad)
 """A selector which is true for parameters that require gradients."""
 
@@ -302,6 +332,7 @@ __all__ = [
     "ParameterRegistration",
     "ParameterSelector",
     "SelectorFunction",
+    "all",
     "is_bias",
     "is_weight",
     "matches_full_name",
@@ -313,6 +344,7 @@ __all__ = [
     "matches_parameter_name",
     "matches_parameter_name_glob",
     "parameter_lambda",
+    "parameters",
     "requires_grad",
     "select_parameters",
 ]
