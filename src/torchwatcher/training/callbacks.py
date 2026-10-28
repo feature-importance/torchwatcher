@@ -1,13 +1,137 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import nullcontext
 from typing import Any
 
 import torch
 import torchbearer
 from model_utilities.utils.callbacks import at_training_iterations
+from torch import nn
 from torchbearer.callbacks import Callback
 
+from torchwatcher.parameters import (
+    ParameterInfo,
+    ParameterSelector,
+    select_parameters,
+)
+
 _GLOBAL_STEP = torchbearer.StateKey("torchwatcher.global_step")
+_PARAMETER_CALLBACK_EVENTS = {
+    "on_start",
+    "on_backward",
+    "on_step_training",
+}
+
+
+class SelectedParametersCallback(Callback):
+    """Apply an action to selected model parameters during training.
+
+    The action receives a :class:`ParameterInfo` object and the Torchbearer
+    state. It is called once for each selected parameter, in selection order.
+    The action is responsible for making any mutation explicitly; its return
+    value is ignored.
+
+    Args:
+        selector_or_parameters: A selector to resolve against the trial's model,
+            or an iterable of parameters registered on that model.
+        action: A callable receiving ``(parameter_info, state)``.
+        event: The Torchbearer event at which to call the action. Supported
+            values are ``on_start``, ``on_backward`` and ``on_step_training``.
+    """
+
+    def __init__(
+        self,
+        selector_or_parameters: ParameterSelector | Iterable[nn.Parameter],
+        action: Callable[[ParameterInfo, Any], Any],
+        *,
+        event: str = "on_backward",
+    ):
+        super().__init__()
+        if not callable(action):
+            raise TypeError("action must be callable")
+        if event not in _PARAMETER_CALLBACK_EVENTS:
+            events = ", ".join(sorted(_PARAMETER_CALLBACK_EVENTS))
+            raise ValueError(f"event must be one of: {events}")
+
+        self.action = action
+        self.event = event
+        self._selector = None
+        self._parameters = None
+        self._selected: tuple[ParameterInfo, ...] | None = None
+
+        if isinstance(selector_or_parameters, ParameterSelector):
+            self._selector = selector_or_parameters
+        else:
+            try:
+                parameters = tuple(selector_or_parameters)
+            except TypeError as error:
+                raise TypeError(
+                    "selector_or_parameters must be a ParameterSelector or an iterable of torch.nn.Parameter objects"
+                ) from error
+
+            if any(not isinstance(parameter, nn.Parameter)
+                   for parameter in parameters):
+                raise TypeError(
+                    "selector_or_parameters must contain only torch.nn.Parameter objects"
+                )
+            parameters_by_id = {}
+            for parameter in parameters:
+                parameters_by_id.setdefault(id(parameter), parameter)
+            self._parameters = tuple(parameters_by_id.values())
+
+    @property
+    def selected(self) -> tuple[ParameterInfo, ...]:
+        """Return the selection resolved against the current trial model."""
+        if self._selected is None:
+            raise RuntimeError(
+                "selected parameters are not available before on_start"
+            )
+        return self._selected
+
+    def on_start(self, state):
+        self._selected = self._resolve(state[torchbearer.MODEL])
+        if not self._selected:
+            raise ValueError("parameter selection matched no parameters")
+        if self.event == "on_start":
+            self._apply(state)
+
+    def on_backward(self, state):
+        if self.event == "on_backward":
+            self._apply(state)
+
+    def on_step_training(self, state):
+        if self.event == "on_step_training":
+            self._apply(state)
+
+    def _resolve(self, model: nn.Module) -> tuple[ParameterInfo, ...]:
+        if self._selector is not None:
+            return tuple(self._selector.select(model))
+
+        model_parameters = {
+            id(info.parameter): info
+            for info in select_parameters(model)
+        }
+        selected = []
+        missing = []
+        for parameter in self._parameters:
+            info = model_parameters.get(id(parameter))
+            if info is None:
+                missing.append(parameter)
+            else:
+                selected.append(info)
+
+        if missing:
+            raise ValueError(
+                f"{len(missing)} selected parameter(s) are not registered on the trial's model"
+            )
+        return tuple(selected)
+
+    def _apply(self, state):
+        if self._selected is None:
+            raise RuntimeError(
+                "SelectedParametersCallback received an event before on_start"
+            )
+        for parameter_info in self._selected:
+            self.action(parameter_info, state)
 
 
 class AnalyserEvaluation(Callback):

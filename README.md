@@ -645,3 +645,40 @@ gradient_evaluation = AnalyserEvaluation(
 `AnalyserEvaluation` preserves any parameter gradients that existed before a
 gradient-enabled snapshot and restores them afterward, so evaluation gradients
 do not leak into the surrounding training loop.
+
+### Applying functions to selected parameters
+
+`SelectedParametersCallback` adapts parameter selectors to the Torchbearer
+training lifecycle. It resolves the selection against the trial model at
+startup and calls an action once for each selected `ParameterInfo`, in selection
+order. By default, the action runs at `on_backward`, after gradients have been
+computed and before the optimizer step.
+
+```python
+import torch
+from torchwatcher.parameters import selectors
+from torchwatcher.training import SelectedParametersCallback
+
+conv_weights = (
+    selectors.matches_module_class(torch.nn.Conv2d)
+    & selectors.is_weight
+)
+
+clip_convolution_gradients = SelectedParametersCallback(
+    conv_weights,
+    lambda parameter_info, state: torch.nn.utils.clip_grad_value_(
+        parameter_info.parameter,
+        clip_value=1.0,
+    ),
+)
+```
+
+An explicit iterable of parameters can be supplied instead of a selector. The
+callback resolves those parameters to `ParameterInfo` objects, preserves their
+input order, removes duplicates, and reports parameters which are not
+registered on the trial model.
+
+Set `event` to `on_start`, `on_backward`, or `on_step_training` to apply the
+action at model startup, between backward and the optimizer step, or after the
+optimizer step respectively. The action's return value is ignored; any
+mutation must be performed explicitly.

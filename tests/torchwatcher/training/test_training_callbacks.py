@@ -3,7 +3,11 @@ import torchbearer
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from torchwatcher.training import AnalyserEvaluation
+from torchwatcher.parameters import selectors
+from torchwatcher.training import (
+    AnalyserEvaluation,
+    SelectedParametersCallback,
+)
 
 
 class FakeAnalyser:
@@ -28,6 +32,142 @@ class RecordingModel(nn.Module):
     def forward(self, x):
         self.calls.append((self.training, torch.is_grad_enabled(), x.device))
         return self.linear(x)
+
+
+def test_selected_parameters_callback_resolves_selector_at_start():
+    model = RecordingModel()
+    calls = []
+    callback = SelectedParametersCallback(
+        selectors.matches_full_name("linear.weight"),
+        lambda parameter_info, state: calls.append((parameter_info, state)),
+    )
+    state = {torchbearer.MODEL: model}
+
+    callback.on_start(state)
+    callback.on_backward(state)
+
+    assert len(calls) == 1
+    assert calls[0][0] is callback.selected[0]
+    assert calls[0][1] is state
+    assert len(callback.selected) == 1
+    assert callback.selected[0].full_name == "linear.weight"
+    assert callback.selected[0].parameter is model.linear.weight
+
+
+def test_selected_parameters_callback_resolves_explicit_parameters():
+    model = RecordingModel()
+    calls = []
+    callback = SelectedParametersCallback(
+        [model.linear.bias, model.linear.weight, model.linear.bias],
+        lambda parameter_info, _: calls.append(parameter_info),
+    )
+    state = {torchbearer.MODEL: model}
+
+    callback.on_start(state)
+    callback.on_backward(state)
+
+    assert [info.parameter for info in calls] == [
+        model.linear.bias,
+        model.linear.weight,
+    ]
+
+
+def test_selected_parameters_callback_supports_explicit_events():
+    model = RecordingModel()
+    state = {torchbearer.MODEL: model}
+
+    for event in ("on_start", "on_backward", "on_step_training"):
+        calls = []
+        callback = SelectedParametersCallback(
+            selectors.matches_full_name("linear.weight"),
+            lambda _, __: calls.append(event),
+            event=event,
+        )
+
+        callback.on_start(state)
+        callback.on_backward(state)
+        callback.on_step_training(state)
+
+        assert calls == [event]
+
+
+def test_selected_parameters_callback_runs_before_optimizer_step():
+    model = nn.Linear(1, 1, bias=False)
+    original_weight = model.weight.detach().clone()
+    loader = DataLoader(
+        TensorDataset(torch.ones(1, 1), torch.zeros(1, 1)),
+        batch_size=1,
+    )
+
+    def clear_gradient(parameter_info, _):
+        parameter_info.parameter.grad.zero_()
+
+    callback = SelectedParametersCallback(
+        selectors.matches_full_name("weight"),
+        clear_gradient,
+    )
+    trial = torchbearer.Trial(
+        model,
+        torch.optim.SGD(model.parameters(), lr=0.1),
+        nn.MSELoss(),
+        callbacks=[callback],
+    )
+
+    trial.with_generators(train_generator=loader).to("cpu")
+    trial.run(1, verbose=0)
+
+    assert torch.equal(model.weight, original_weight)
+
+
+def test_selected_parameters_callback_rejects_empty_selection():
+    callback = SelectedParametersCallback(
+        selectors.matches_full_name("missing"),
+        lambda *_: None,
+    )
+
+    try:
+        callback.on_start({torchbearer.MODEL: RecordingModel()})
+    except ValueError as exc:
+        assert "matched no parameters" in str(exc)
+    else:
+        raise AssertionError("callback accepted an empty parameter selection")
+
+
+def test_selected_parameters_callback_rejects_unregistered_parameter():
+    callback = SelectedParametersCallback(
+        [nn.Parameter(torch.ones(1))],
+        lambda *_: None,
+    )
+
+    try:
+        callback.on_start({torchbearer.MODEL: RecordingModel()})
+    except ValueError as exc:
+        assert "not registered" in str(exc)
+    else:
+        raise AssertionError("callback accepted an unregistered parameter")
+
+
+def test_selected_parameters_callback_validates_constructor_arguments():
+    try:
+        SelectedParametersCallback([], None)
+    except TypeError as exc:
+        assert "action" in str(exc)
+    else:
+        raise AssertionError("callback accepted a non-callable action")
+
+    try:
+        SelectedParametersCallback([], lambda *_: None, event="unknown")
+    except ValueError as exc:
+        assert "event" in str(exc)
+    else:
+        raise AssertionError("callback accepted an unknown event")
+
+    try:
+        SelectedParametersCallback([torch.ones(1)], lambda *_: None)
+    except TypeError as exc:
+        assert "Parameter" in str(exc)
+    else:
+        raise AssertionError("callback accepted a non-parameter tensor")
 
 
 def test_analyser_evaluation_records_and_restores_state():
