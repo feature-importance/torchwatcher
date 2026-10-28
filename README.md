@@ -790,3 +790,86 @@ Set `event` to `on_start`, `on_backward`, or `on_step_training` to apply the
 action at model startup, between backward and the optimizer step, or after the
 optimizer step respectively. The action's return value is ignored; any
 mutation must be performed explicitly.
+
+### Tracking selected parameters
+
+`ParameterTracker` records named measurements of selected parameters. Each
+measurement receives a `ParameterInfo` and the Torchbearer state, and can
+return a scalar, tensor, or nested mapping. A schedule controls which training
+steps are sent to the observation sink:
+
+```python
+from torchwatcher.logging import InMemorySink
+from torchwatcher.parameters import selectors
+from torchwatcher.training import EveryNSteps, ParameterTracker
+
+sink = InMemorySink()
+tracker = ParameterTracker(
+    selectors.is_weight,
+    {
+        "gradient_norm": lambda info, state: info.parameter.grad.norm(),
+    },
+    sink,
+    schedule=EveryNSteps(10),
+)
+```
+
+The default event is `on_backward`, after gradients have been computed and
+before the optimizer update. Backward observations are associated with the
+upcoming optimizer step. Use `event="on_step_training"` to record parameter
+values after the optimizer update, or `event="on_start"` to record the initial
+state.
+
+Measurements can return nested mappings for related aggregations. They are
+flattened into separate observation paths:
+
+```python
+import torch
+
+channel_norms = ParameterTracker(
+    selectors.matches_module_class(torch.nn.Conv2d) & selectors.is_weight,
+    {
+        "gradient_norm": lambda info, state: {
+            "whole": torch.linalg.vector_norm(info.parameter.grad),
+            "per_output_channel": torch.linalg.vector_norm(
+                info.parameter.grad,
+                dim=(1, 2, 3),
+            ),
+        },
+    },
+    sink,
+)
+```
+
+The tracker includes a `TrainingClock`; pass the same clock to multiple
+trackers or analyser-evaluation callbacks when they should share restored
+state. At training end it flushes the sink but leaves closing caller-owned
+sinks to the caller.
+
+To measure the update actually applied by the optimizer, use the synthetic
+`optimizer_step` event. The tracker snapshots selected parameters after
+backward, then subtracts that snapshot from the post-optimizer value. These
+measurement functions receive `(step, parameter_info, state)`, where
+`step = parameter_after - parameter_before`:
+
+```python
+applied_steps = ParameterTracker(
+    selectors.is_weight,
+    {
+        "norm": lambda step, info, state: torch.linalg.vector_norm(step),
+        "per_output_channel": lambda step, info, state: (
+            torch.linalg.vector_norm(step, dim=(1, 2, 3))
+        ),
+    },
+    sink,
+    schedule=EveryNSteps(10),
+    event="optimizer_step",
+)
+```
+
+This records the realized update, including learning rate, momentum, adaptive
+scaling, weight decay and prior gradient mutation. The schedule is evaluated
+before the optimizer runs, so parameter snapshots are only retained for steps
+that will be recorded. Callback ordering remains significant: parameter
+mutations made after the optimizer but before the tracker's
+`on_step_training` callback are included in the measured step.

@@ -11,8 +11,8 @@ from torchbearer.callbacks import Callback
 from torchwatcher.parameters import (
     ParameterInfo,
     ParameterSelector,
-    select_parameters,
 )
+from torchwatcher.training._parameter_selection import ParameterSelection
 from torchwatcher.training.scheduling import (
     GLOBAL_STEP,
     EveryNSteps,
@@ -60,29 +60,8 @@ class SelectedParametersCallback(Callback):
 
         self.action = action
         self.event = event
-        self._selector = None
-        self._parameters = None
+        self._selection = ParameterSelection(selector_or_parameters)
         self._selected: tuple[ParameterInfo, ...] | None = None
-
-        if isinstance(selector_or_parameters, ParameterSelector):
-            self._selector = selector_or_parameters
-        else:
-            try:
-                parameters = tuple(selector_or_parameters)
-            except TypeError as error:
-                raise TypeError(
-                    "selector_or_parameters must be a ParameterSelector or an iterable of torch.nn.Parameter objects"
-                ) from error
-
-            if any(not isinstance(parameter, nn.Parameter)
-                   for parameter in parameters):
-                raise TypeError(
-                    "selector_or_parameters must contain only torch.nn.Parameter objects"
-                )
-            parameters_by_id = {}
-            for parameter in parameters:
-                parameters_by_id.setdefault(id(parameter), parameter)
-            self._parameters = tuple(parameters_by_id.values())
 
     @property
     def selected(self) -> tuple[ParameterInfo, ...]:
@@ -94,7 +73,7 @@ class SelectedParametersCallback(Callback):
         return self._selected
 
     def on_start(self, state):
-        self._selected = self._resolve(state[torchbearer.MODEL])
+        self._selected = self._selection.resolve(state[torchbearer.MODEL])
         if not self._selected:
             raise ValueError("parameter selection matched no parameters")
         if self.event == "on_start":
@@ -107,29 +86,6 @@ class SelectedParametersCallback(Callback):
     def on_step_training(self, state):
         if self.event == "on_step_training":
             self._apply(state)
-
-    def _resolve(self, model: nn.Module) -> tuple[ParameterInfo, ...]:
-        if self._selector is not None:
-            return tuple(self._selector.select(model))
-
-        model_parameters = {
-            id(info.parameter): info
-            for info in select_parameters(model)
-        }
-        selected = []
-        missing = []
-        for parameter in self._parameters:
-            info = model_parameters.get(id(parameter))
-            if info is None:
-                missing.append(parameter)
-            else:
-                selected.append(info)
-
-        if missing:
-            raise ValueError(
-                f"{len(missing)} selected parameter(s) are not registered on the trial's model"
-            )
-        return tuple(selected)
 
     def _apply(self, state):
         if self._selected is None:
