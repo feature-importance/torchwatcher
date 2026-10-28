@@ -298,6 +298,28 @@ optimizer = torch.optim.Adam(
 The equivalent function form is `parameters(model, selector)`, imported from
 `torchwatcher.parameters`. Omitting the selector returns every parameter.
 
+For multiple optimizer groups, describe each selection with `ParameterGroup`
+and resolve them with `build_parameter_groups`:
+
+```python
+from torchwatcher.training import ParameterGroup, build_parameter_groups
+
+groups = build_parameter_groups(
+    model,
+    ParameterGroup(selectors.is_bias, weight_decay=0.0),
+)
+optimizer = torch.optim.AdamW(
+    groups,
+    lr=1e-3,
+    weight_decay=0.01,
+)
+```
+
+Parameters not matched by an explicit group are placed in a final group, where
+they use the optimizer defaults. Explicit groups must not overlap or be empty.
+Pass `include_remaining=False` to intentionally leave unmatched parameters out
+of the optimizer.
+
 Shared parameters are returned once. Every owning module and qualified name is
 retained in `ParameterInfo.registrations`, while `ParameterInfo.aliases`
 provides the qualified names directly. This makes selections safe to use when
