@@ -16,7 +16,8 @@ class ObservationContext:
     use an empty context.
 
     Args:
-        global_step: The zero-based global training step.
+        global_step: The number of the training step associated with the
+            observation. Zero represents the initial model state.
         epoch: The epoch associated with the observation.
         batch: The batch associated with the observation.
         event: The lifecycle event at which the observation was made.

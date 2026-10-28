@@ -6,7 +6,9 @@ from torch.utils.data import DataLoader, TensorDataset
 from torchwatcher.parameters import selectors
 from torchwatcher.training import (
     AnalyserEvaluation,
+    PiecewiseSchedule,
     SelectedParametersCallback,
+    TrainingClock,
 )
 
 
@@ -338,3 +340,34 @@ def test_analyser_evaluation_accepts_arbitrary_training_iteration_schedule():
         "batch",
     ]
     assert [record["global_step"] for record in evaluation.records] == [1, 3]
+
+
+def test_analyser_evaluation_accepts_observation_schedule_and_shared_clock():
+    model = RecordingModel()
+    train_loader = DataLoader(
+        TensorDataset(torch.randn(8, 2), torch.zeros(8, 1)),
+        batch_size=2,
+    )
+    eval_loader = DataLoader(
+        TensorDataset(torch.randn(1, 2), torch.tensor([0])),
+        batch_size=1,
+    )
+    evaluation = AnalyserEvaluation(FakeAnalyser(), eval_loader)
+    clock = TrainingClock()
+    trial = torchbearer.Trial(
+        model,
+        torch.optim.SGD(model.parameters(), lr=0.01),
+        nn.BCEWithLogitsLoss(),
+        metrics=["loss"],
+        callbacks=evaluation.callbacks(
+            schedule=PiecewiseSchedule([(2, 1), (None, 2)]),
+            include_start=False,
+            include_end=False,
+            clock=clock,
+        ),
+    )
+
+    trial.with_generators(train_generator=train_loader).to("cpu")
+    trial.run(1, verbose=0)
+
+    assert [record["global_step"] for record in evaluation.records] == [1, 2, 4]

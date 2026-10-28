@@ -13,8 +13,14 @@ from torchwatcher.parameters import (
     ParameterSelector,
     select_parameters,
 )
+from torchwatcher.training.scheduling import (
+    GLOBAL_STEP,
+    EveryNSteps,
+    ObservationSchedule,
+    TrainingClock,
+    as_iteration_predicate,
+)
 
-_GLOBAL_STEP = torchbearer.StateKey("torchwatcher.global_step")
 _PARAMETER_CALLBACK_EVENTS = {
     "on_start",
     "on_backward",
@@ -175,6 +181,7 @@ class AnalyserEvaluation(Callback):
         schedule=None,
         include_start: bool = True,
         include_end: bool = True,
+        clock: TrainingClock | None = None,
     ) -> list[Callback]:
         if every_n_batches is None and schedule is None:
             raise ValueError("every_n_batches or schedule must be provided")
@@ -184,13 +191,17 @@ class AnalyserEvaluation(Callback):
             raise ValueError("every_n_batches must be a positive integer")
 
         if every_n_batches is not None:
-            schedule = lambda index: (index + 1) % every_n_batches == 0
+            schedule = EveryNSteps(every_n_batches)
+        if clock is not None and not isinstance(clock, TrainingClock):
+            raise TypeError("clock must be a TrainingClock or None")
 
         callbacks = []
         if include_start:
             callbacks.append(_RecordAnalyserEvaluation(self, "start"))
 
-        callbacks.append(_TrainingIterationCounter())
+        callbacks.append(clock or TrainingClock())
+        if isinstance(schedule, ObservationSchedule):
+            schedule = as_iteration_predicate(schedule)
         callbacks.append(at_training_iterations(schedule)(self))
 
         if include_end:
@@ -202,7 +213,7 @@ class AnalyserEvaluation(Callback):
         self.record(
             state,
             event="batch",
-            global_step=state.get(_GLOBAL_STEP),
+            global_step=state.get(GLOBAL_STEP),
         )
 
     def record(self, state, *, event, global_step=None) -> dict:
@@ -238,7 +249,7 @@ class AnalyserEvaluation(Callback):
             model.train(was_training)
 
         if global_step is None:
-            global_step = state.get(_GLOBAL_STEP, self._last_recorded_step)
+            global_step = state.get(GLOBAL_STEP, self._last_recorded_step)
 
         record = {
             "event": event,
@@ -264,21 +275,13 @@ class _RecordAnalyserEvaluation(Callback):
 
     def on_end(self, state):
         if self.event == "end":
-            global_step = state.get(_GLOBAL_STEP)
+            global_step = state.get(GLOBAL_STEP)
             if self.evaluation._last_recorded_step != global_step:
                 self.evaluation.record(
                     state,
                     event="end",
                     global_step=global_step,
                 )
-
-
-class _TrainingIterationCounter(Callback):
-    def on_start(self, state):
-        state[_GLOBAL_STEP] = 0
-
-    def on_step_training(self, state):
-        state[_GLOBAL_STEP] = state.get(_GLOBAL_STEP, 0) + 1
 
 
 def _default_inputs(batch, device):

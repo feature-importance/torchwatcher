@@ -684,6 +684,32 @@ history = trial.run(epochs)
 snapshots = rank_evaluation.records
 ```
 
+Scheduling and global-step tracking are shared training utilities. Built-in
+schedules receive an `ObservationContext`, allowing the same schedule to be
+used by analyser evaluation and parameter tracking:
+
+```python
+from torchwatcher.training import PiecewiseSchedule, TrainingClock
+
+clock = TrainingClock()
+schedule = PiecewiseSchedule([
+    (100, 1),
+    (1000, 10),
+    (None, 100),
+])
+
+callbacks = rank_evaluation.callbacks(
+    schedule=schedule,
+    clock=clock,
+)
+```
+
+`EveryNSteps(n)` records at fixed intervals, `AtSteps(...)` records explicit
+global steps, and `PredicateSchedule` adapts an arbitrary context predicate.
+Global step zero represents the initial model state; the first completed
+optimizer step is one. Pre-step consumers can associate gradients with that
+same step by requesting the upcoming-step context from `TrainingClock`.
+
 Each record has the following structure:
 
 ```text
