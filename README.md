@@ -9,6 +9,9 @@ Because TorchWatcher operates on the FX graph, it can target module calls as
 well as operations such as `torch.nn.functional.relu` that ordinary module
 hooks cannot reach.
 
+It also has facilities for tracking and logging model parameters and activations 
+(during both training and/or inference), and for drawing the model's compute graph.
+
 ## Installation
 
 TorchWatcher requires Python 3.11 or newer and PyTorch 2.2 or newer. Install the
@@ -58,7 +61,7 @@ It includes guides to:
 - [analysis and CKA](docs/guides/analysis.md);
 - [training integration and parameter tracking](docs/guides/training.md).
 
-The Markdown sources remain readable directly in the repository, starting at
+The documentation sources are available directly at
 [docs/index.md](docs/index.md).
 
 ## Development
@@ -68,12 +71,11 @@ python -m pip install -e ".[test]"
 pytest
 ```
 
-Build and preview the documentation with the same pinned Zensical release used
-by GitHub Actions:
+Build and preview the documentation:
 
 ```bash
 python -m pip install -r requirements-docs.txt
 zensical serve
 ```
 
-The project is licensed under the terms in [LICENSE](LICENSE).
+The project is licensed under the BSD 3-Clause License following the terms in [LICENSE](LICENSE).
