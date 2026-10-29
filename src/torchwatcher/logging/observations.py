@@ -2,10 +2,39 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
+
+
+ObservationPath = tuple[str, ...]
+"""The canonical immutable path of an observation series."""
+
+ObservationPathInput = str | Sequence[str]
+"""A path form accepted and normalized by :class:`Observation`."""
+
+
+def normalise_observation_path(path: ObservationPathInput) -> ObservationPath:
+    """Normalize an observation path to its canonical tuple representation.
+
+    A string is treated as one path component and is never split. Other
+    accepted sequences are copied into an immutable tuple.
+    """
+    if isinstance(path, str):
+        path = (path,)
+    elif isinstance(path, Sequence) and not isinstance(path, (bytes, bytearray)):
+        path = tuple(path)
+    else:
+        raise TypeError("path must be a string or a sequence of strings")
+
+    if not path:
+        raise ValueError("path must not be empty")
+    if any(not isinstance(component, str) for component in path):
+        raise TypeError("path components must be strings")
+    if any(not component for component in path):
+        raise ValueError("path components must be non-empty")
+    return path
 
 
 @dataclass(frozen=True)
@@ -54,26 +83,24 @@ class Observation:
     how those values are serialized.
 
     Args:
-        path: A non-empty tuple identifying the observation series.
+        path: A string or non-empty sequence of strings identifying the
+            observation series. It is normalized to :class:`ObservationPath`.
         value: The observed value.
         context: Where the observation was made.
         metadata: Additional descriptive information about the series.
     """
 
-    path: tuple[str, ...]
+    path: ObservationPathInput
     value: Any
     context: ObservationContext = field(default_factory=ObservationContext)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.path, tuple):
-            raise TypeError("path must be a tuple of strings")
-        if not self.path:
-            raise ValueError("path must not be empty")
-        if any(not isinstance(component, str) for component in self.path):
-            raise TypeError("path components must be strings")
-        if any(not component for component in self.path):
-            raise ValueError("path components must be non-empty")
+        object.__setattr__(
+            self,
+            "path",
+            normalise_observation_path(self.path),
+        )
         if not isinstance(self.context, ObservationContext):
             raise TypeError("context must be an ObservationContext")
         if not isinstance(self.metadata, Mapping):
@@ -91,4 +118,7 @@ class Observation:
 __all__ = [
     "Observation",
     "ObservationContext",
+    "ObservationPath",
+    "ObservationPathInput",
+    "normalise_observation_path",
 ]

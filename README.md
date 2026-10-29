@@ -330,13 +330,28 @@ constructing optimizer parameter groups.
 `torchwatcher.logging` defines a storage-independent observation format for
 parameter tracking and analyser results. An observation has a stable
 hierarchical path, a value, optional training context, and descriptive
-metadata:
+metadata. `ObservationPath` is the public type alias for its canonical
+immutable `tuple[str, ...]` representation. `Observation` also accepts a bare
+string or another sequence of strings and normalizes it to that form. A bare
+string is always one component; dots and slashes are not interpreted as
+separators:
 
 ```python
-from torchwatcher.logging import Observation, ObservationContext
+from torchwatcher.logging import (
+    Observation,
+    ObservationContext,
+    ObservationPath,
+)
+
+path: ObservationPath = (
+    "parameters",
+    "classifier.weight",
+    "gradient",
+    "l2",
+)
 
 observation = Observation(
-    path=("parameters", "classifier.weight", "gradient", "l2"),
+    path=path,
     value=gradient_norm,
     context=ObservationContext(
         global_step=100,

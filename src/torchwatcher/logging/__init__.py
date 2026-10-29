@@ -1,6 +1,12 @@
 """Structured logging and storage interfaces."""
 
-from .observations import Observation, ObservationContext
+from .observations import (
+    Observation,
+    ObservationContext,
+    ObservationPath,
+    ObservationPathInput,
+    normalise_observation_path,
+)
 from .processing import (
     flatten_observation,
     normalise_observation,
@@ -13,8 +19,11 @@ __all__ = [
     "InMemorySink",
     "Observation",
     "ObservationContext",
+    "ObservationPath",
+    "ObservationPathInput",
     "ObservationSink",
     "flatten_observation",
     "normalise_observation",
+    "normalise_observation_path",
     "normalise_value",
 ]

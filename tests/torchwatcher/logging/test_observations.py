@@ -3,11 +3,22 @@ from types import MappingProxyType
 import pytest
 import torch
 
-from torchwatcher.logging import Observation, ObservationContext
+from torchwatcher.logging import (
+    Observation,
+    ObservationContext,
+    ObservationPath,
+    normalise_observation_path,
+)
 
 
 def test_observation_stores_value_path_and_context():
     value = torch.tensor([1.0, 2.0])
+    path: ObservationPath = (
+        "parameters",
+        "linear.weight",
+        "gradient",
+        "l2",
+    )
     context = ObservationContext(
         global_step=12,
         epoch=2,
@@ -16,18 +27,13 @@ def test_observation_stores_value_path_and_context():
     )
 
     observation = Observation(
-        path=("parameters", "linear.weight", "gradient", "l2"),
+        path=path,
         value=value,
         context=context,
         metadata={"units": "norm"},
     )
 
-    assert observation.path == (
-        "parameters",
-        "linear.weight",
-        "gradient",
-        "l2",
-    )
+    assert observation.path == path
     assert observation.value is value
     assert observation.context is context
     assert observation.metadata == {"units": "norm"}
@@ -45,16 +51,39 @@ def test_observation_copies_metadata():
         observation.metadata["source"] = "value"
 
 
-@pytest.mark.parametrize("path", [(), ("",), ("parameters", "")])
+@pytest.mark.parametrize("path", ["", (), [], ("",), ("parameters", "")])
 def test_observation_rejects_empty_paths(path):
     with pytest.raises(ValueError, match="path"):
         Observation(path, 1.0)
 
 
-@pytest.mark.parametrize("path", ["metric", ["metric"], ("metric", 1)])
-def test_observation_requires_a_tuple_of_strings(path):
+@pytest.mark.parametrize("path", [1, b"metric", {"metric"}, ("metric", 1)])
+def test_observation_requires_strings_or_a_string_sequence(path):
     with pytest.raises(TypeError, match="path"):
         Observation(path, 1.0)
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("metric", ("metric",)),
+        ("classifier.weight", ("classifier.weight",)),
+        (["analysers", "rank"], ("analysers", "rank")),
+        (("parameters", "weight"), ("parameters", "weight")),
+    ],
+)
+def test_observation_normalises_supported_path_forms(path, expected):
+    assert Observation(path, 1.0).path == expected
+    assert normalise_observation_path(path) == expected
+
+
+def test_observation_copies_mutable_path_input():
+    path = ["analysers", "rank"]
+
+    observation = Observation(path, 1.0)
+    path.append("changed")
+
+    assert observation.path == ("analysers", "rank")
 
 
 def test_observation_validates_context_and_metadata():

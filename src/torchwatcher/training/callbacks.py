@@ -9,7 +9,11 @@ from torch import nn
 from torchbearer.callbacks import Callback
 
 from torchwatcher.analysis.observations import analyser_observations
-from torchwatcher.logging import ObservationContext, ObservationSink
+from torchwatcher.logging import (
+    ObservationContext,
+    ObservationPathInput,
+    ObservationSink,
+)
 from torchwatcher.parameters import (
     ParameterInfo,
     ParameterSelector,
@@ -134,7 +138,7 @@ class AnalyserEvaluation(Callback):
         backward: Callable[[Any, Any], Any] | None = None,
         records: list[dict] | None = None,
         sink: ObservationSink | None = None,
-        path: tuple[str, ...] | None = None,
+        path: ObservationPathInput | None = None,
         retain_records: bool = True,
     ):
         super().__init__()
