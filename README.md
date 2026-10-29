@@ -368,6 +368,27 @@ sink.write([observation])
 by extending their paths. `normalise_observation` and `normalise_value` provide
 the recursive tensor snapshotting used by storage implementations.
 
+Any completed analyser result can be converted into observations with
+`analyser_observations`:
+
+```python
+from torchwatcher.analysis import analyser_observations
+from torchwatcher.logging import ObservationContext
+
+result = analyser.run(model, loader)
+sink.write(analyser_observations(
+    analyser,
+    result=result,
+    path=("analysers", "feature-statistics"),
+    context=ObservationContext(event="evaluation"),
+))
+```
+
+If `result` is omitted, the adapter calls `analyser.to_dict()`. Nested analyser
+results are flattened below the supplied path, and the analyser's qualified
+class name is included in observation metadata. When no path is supplied, the
+default is `("analysers", type(analyser).__name__)`.
+
 ## Drawing model graphs
 
 The `torchwatcher.drawing` module can render traced, interjected, or rewritten
@@ -683,6 +704,28 @@ history = trial.run(epochs)
 
 snapshots = rank_evaluation.records
 ```
+
+Evaluation results can also be written directly to an observation sink:
+
+```python
+from torchwatcher.logging import InMemorySink
+
+sink = InMemorySink()
+rank_evaluation = AnalyserEvaluation(
+    rank_analyser,
+    rank_loader,
+    sink=sink,
+    path=("analysers", "rank"),
+    retain_records=False,
+)
+```
+
+`retain_records` defaults to `True` for compatibility. Set it to `False` when
+the sink is the authoritative store so large results are not also retained in
+memory. The sink receives flattened observations whose context identifies the
+training step that triggered the evaluation; its batch is not the batch index
+within the evaluation loader. Evaluation callbacks flush the sink at training
+end but do not close it.
 
 Scheduling and global-step tracking are shared training utilities. Built-in
 schedules receive an `ObservationContext`, allowing the same schedule to be

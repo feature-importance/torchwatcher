@@ -1,8 +1,10 @@
+import pytest
 import torch
 import torchbearer
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+from torchwatcher.logging import InMemorySink
 from torchwatcher.parameters import selectors
 from torchwatcher.training import (
     AnalyserEvaluation,
@@ -23,6 +25,22 @@ class FakeAnalyser:
 
     def to_dict(self):
         return self.result
+
+
+class RecordingSink:
+    def __init__(self):
+        self.observations = []
+        self.flush_count = 0
+        self.closed = False
+
+    def write(self, observations):
+        self.observations.extend(observations)
+
+    def flush(self):
+        self.flush_count += 1
+
+    def close(self):
+        self.closed = True
 
 
 class RecordingModel(nn.Module):
@@ -228,6 +246,91 @@ def test_analyser_evaluation_can_enable_gradient_computation():
     assert model.linear.weight.grad is None
 
 
+def test_analyser_evaluation_writes_results_to_sink():
+    model = RecordingModel()
+    analyser = FakeAnalyser({
+        "layer": {
+            "mean": torch.tensor(1.0),
+            "variance": torch.tensor(2.0),
+        }
+    })
+    loader = DataLoader(
+        TensorDataset(torch.randn(1, 2), torch.ones(1)),
+        batch_size=1,
+    )
+    sink = InMemorySink()
+    evaluation = AnalyserEvaluation(
+        analyser,
+        loader,
+        sink=sink,
+        path=("analysers", "features"),
+        retain_records=False,
+    )
+    state = {
+        torchbearer.MODEL: model,
+        torchbearer.EPOCH: 1,
+        torchbearer.BATCH: 2,
+    }
+
+    record = evaluation.record(state, event="batch", global_step=5)
+
+    assert evaluation.records == []
+    assert record["result"] is analyser.result
+    assert [item.path for item in sink.observations] == [
+        ("analysers", "features", "layer", "mean"),
+        ("analysers", "features", "layer", "variance"),
+    ]
+    assert [item.value.item() for item in sink.observations] == [1.0, 2.0]
+    assert all(item.context.global_step == 5 for item in sink.observations)
+    assert all(item.context.epoch == 2 for item in sink.observations)
+    assert all(item.context.batch == 3 for item in sink.observations)
+    assert all(item.context.event == "batch" for item in sink.observations)
+
+
+def test_analyser_evaluation_retains_records_with_sink_by_default():
+    model = RecordingModel()
+    loader = DataLoader(
+        TensorDataset(torch.randn(1, 2), torch.ones(1)),
+        batch_size=1,
+    )
+    evaluation = AnalyserEvaluation(
+        FakeAnalyser(),
+        loader,
+        sink=InMemorySink(),
+    )
+
+    record = evaluation.record(
+        {torchbearer.MODEL: model},
+        event="batch",
+        global_step=1,
+    )
+
+    assert evaluation.records == [record]
+
+
+def test_analyser_evaluation_validates_sink_configuration():
+    loader = DataLoader(
+        TensorDataset(torch.randn(1, 2), torch.ones(1)),
+        batch_size=1,
+    )
+
+    with pytest.raises(TypeError, match="ObservationSink"):
+        AnalyserEvaluation(FakeAnalyser(), loader, sink=object())
+    with pytest.raises(TypeError, match="retain_records"):
+        AnalyserEvaluation(
+            FakeAnalyser(),
+            loader,
+            retain_records=1,
+        )
+    with pytest.raises(ValueError, match="records"):
+        AnalyserEvaluation(
+            FakeAnalyser(),
+            loader,
+            records=[],
+            retain_records=False,
+        )
+
+
 def test_analyser_evaluation_runs_optional_backward_callback():
     model = RecordingModel()
     original_weight_grad = torch.ones_like(model.linear.weight)
@@ -371,3 +474,39 @@ def test_analyser_evaluation_accepts_observation_schedule_and_shared_clock():
     trial.run(1, verbose=0)
 
     assert [record["global_step"] for record in evaluation.records] == [1, 2, 4]
+
+
+def test_analyser_evaluation_flushes_but_does_not_close_sink():
+    model = RecordingModel()
+    train_loader = DataLoader(
+        TensorDataset(torch.randn(2, 2), torch.zeros(2, 1)),
+        batch_size=2,
+    )
+    eval_loader = DataLoader(
+        TensorDataset(torch.randn(1, 2), torch.tensor([0])),
+        batch_size=1,
+    )
+    sink = RecordingSink()
+    evaluation = AnalyserEvaluation(
+        FakeAnalyser(),
+        eval_loader,
+        sink=sink,
+    )
+    trial = torchbearer.Trial(
+        model,
+        torch.optim.SGD(model.parameters(), lr=0.01),
+        nn.BCEWithLogitsLoss(),
+        metrics=["loss"],
+        callbacks=evaluation.callbacks(
+            every_n_batches=1,
+            include_start=False,
+            include_end=False,
+        ),
+    )
+
+    trial.with_generators(train_generator=train_loader).to("cpu")
+    trial.run(1, verbose=0)
+
+    assert sink.observations
+    assert sink.flush_count == 1
+    assert not sink.closed

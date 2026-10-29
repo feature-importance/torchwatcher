@@ -8,6 +8,8 @@ from model_utilities.utils.callbacks import at_training_iterations
 from torch import nn
 from torchbearer.callbacks import Callback
 
+from torchwatcher.analysis.observations import analyser_observations
+from torchwatcher.logging import ObservationContext, ObservationSink
 from torchwatcher.parameters import (
     ParameterInfo,
     ParameterSelector,
@@ -103,7 +105,23 @@ class AnalyserEvaluation(Callback):
     ``model_utilities.utils.callbacks.at_training_iterations`` schedule. By
     default, snapshot passes run with gradient computation disabled. Set
     ``compute_gradients=True`` and optionally provide ``backward`` for analysers
-    that need a backward pass.
+    that need a backward pass. Results can be retained in ``records``, written
+    to an observation sink, or both.
+
+    Args:
+        analyser: The analyser to evaluate.
+        loader: The data loader used for each evaluation.
+        prepare_inputs: An optional function converting a batch and device to
+            model inputs.
+        compute_gradients: Whether evaluation should track gradients.
+        backward: An optional function performing or returning a backward
+            computation for each batch.
+        records: A list in which legacy result records are retained.
+        sink: An optional destination for flattened analyser observations.
+        path: The root observation path. By default, use the analyser class
+            name below ``analysers``.
+        retain_records: Whether to retain results in ``records`` in addition
+            to writing them to the sink.
     """
 
     def __init__(
@@ -115,11 +133,22 @@ class AnalyserEvaluation(Callback):
         compute_gradients: bool = False,
         backward: Callable[[Any, Any], Any] | None = None,
         records: list[dict] | None = None,
+        sink: ObservationSink | None = None,
+        path: tuple[str, ...] | None = None,
+        retain_records: bool = True,
     ):
         super().__init__()
         if backward is not None and not compute_gradients:
             raise ValueError(
                 "compute_gradients must be True when backward is provided"
+            )
+        if sink is not None and not isinstance(sink, ObservationSink):
+            raise TypeError("sink must implement ObservationSink or be None")
+        if not isinstance(retain_records, bool):
+            raise TypeError("retain_records must be a bool")
+        if not retain_records and records is not None:
+            raise ValueError(
+                "records cannot be provided when retain_records is False"
             )
 
         self.analyser = analyser
@@ -128,6 +157,9 @@ class AnalyserEvaluation(Callback):
         self.compute_gradients = compute_gradients
         self.backward = backward
         self.records = [] if records is None else records
+        self.sink = sink
+        self.path = path
+        self.retain_records = retain_records
         self._last_recorded_step: int | None = None
 
     def callbacks(
@@ -162,6 +194,8 @@ class AnalyserEvaluation(Callback):
 
         if include_end:
             callbacks.append(_RecordAnalyserEvaluation(self, "end"))
+        if self.sink is not None:
+            callbacks.append(_FlushAnalyserEvaluationSink(self))
 
         return callbacks
 
@@ -207,14 +241,28 @@ class AnalyserEvaluation(Callback):
         if global_step is None:
             global_step = state.get(GLOBAL_STEP, self._last_recorded_step)
 
+        context = ObservationContext(
+            global_step=global_step,
+            epoch=_epoch(state, event),
+            batch=_batch(state, event),
+            event=event,
+        )
         record = {
             "event": event,
-            "epoch": _epoch(state, event),
-            "batch": _batch(state, event),
+            "epoch": context.epoch,
+            "batch": context.batch,
             "global_step": global_step,
             "result": result,
         }
-        self.records.append(record)
+        if self.retain_records:
+            self.records.append(record)
+        if self.sink is not None:
+            self.sink.write(analyser_observations(
+                self.analyser,
+                path=self.path,
+                context=context,
+                result=result,
+            ))
         self._last_recorded_step = global_step
         return record
 
@@ -238,6 +286,15 @@ class _RecordAnalyserEvaluation(Callback):
                     event="end",
                     global_step=global_step,
                 )
+
+
+class _FlushAnalyserEvaluationSink(Callback):
+    def __init__(self, evaluation: AnalyserEvaluation):
+        super().__init__()
+        self.evaluation = evaluation
+
+    def on_end(self, state):
+        self.evaluation.sink.flush()
 
 
 def _default_inputs(batch, device):

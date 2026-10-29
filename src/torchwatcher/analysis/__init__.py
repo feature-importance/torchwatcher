@@ -15,6 +15,7 @@ from .cka import CKAResult, LinearCKAAnalyser
 from .basic_statistics import FeatureStatistics
 from .dead_relus import DeadReLU
 from .linear_probe import LinearProbe, LinearProbeCallback
+from .observations import analyser_observations
 from .rank import (
     CovarianceSpectrumStatisticsAnalyser,
     LayerWeightRankAnalyser,
@@ -81,6 +82,7 @@ __all__ = [
     "TargetException",
     "TopK",
     "Variance",
+    "analyser_observations",
     "cache_load_enabled",
     "compute_cov_spectrum_stats",
     "estimate_rank",
