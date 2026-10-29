@@ -46,7 +46,7 @@ python_files = [
 
 [project.urls]
 Homepage = "https://github.com/feature-importance/torchwatcher"
-Documentation = "https://github.com/feature-importance/torchwatcher"
+Documentation = "https://feature-importance.github.io/torchwatcher/"
 Repository = "https://github.com/feature-importance/torchwatcher.git"
 "Bug Tracker" = "https://github.com/feature-importance/torchwatcher/issues"
 

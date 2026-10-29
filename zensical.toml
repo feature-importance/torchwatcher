@@ -1,0 +1,37 @@
+[project]
+site_name = "TorchWatcher"
+site_url = "https://feature-importance.github.io/torchwatcher/"
+site_description = "Trace, modify, and analyse PyTorch compute graphs."
+site_author = "TorchWatcher contributors"
+repo_url = "https://github.com/feature-importance/torchwatcher"
+repo_name = "feature-importance/torchwatcher"
+edit_uri = "edit/main/docs/"
+nav = [
+  { "Home" = "index.md" },
+  { "Getting started" = "getting-started.md" },
+  { "Guides" = [
+    { "Interjections" = "guides/interjections.md" },
+    { "Rewriting model graphs" = "guides/rewriting-graphs.md" },
+    { "Selecting model parameters" = "guides/parameter-selection.md" },
+    { "Logging observations" = "guides/observation-logging.md" },
+    { "Drawing model graphs" = "guides/drawing-model-graphs.md" },
+    { "Analysis" = "guides/analysis.md" },
+    { "Training integration" = "guides/training.md" },
+  ] },
+]
+
+[project.theme]
+features = [
+  "content.action.edit",
+  "content.action.view",
+  "navigation.instant",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.tracking",
+  "toc.follow",
+]
+
+[project.theme.icon]
+repo = "fontawesome/brands/github"
+
