@@ -4,6 +4,7 @@ from torch import nn
 
 from torchwatcher.analysis import (
     AnalyserList,
+    CovarianceSpectrumStatisticsAnalyser,
     LayerWeightRankAnalyser,
     PerChannelWeightRankAnalyser,
     RankAnalyser,
@@ -98,6 +99,48 @@ def test_rank_analyser_non_positive_sample_size_uses_every_feature():
     watched_model(features)
 
     assert analyser.to_dict()["0"]["features_rank"] == 2
+
+
+@pytest.mark.parametrize("mode", ["a", "aaT"])
+def test_rank_analyser_retains_features_before_downstream_inplace_update(mode):
+    features = torch.tensor([
+        [-1.0, 0.0],
+        [0.0, -1.0],
+        [1.0, 1.0],
+    ])
+    analyser = RankAnalyser(mode=mode, n=-1)
+    watched_model = interject_by_name(
+        nn.Sequential(nn.Identity(), nn.ReLU(inplace=True)),
+        "0",
+        analyser,
+    )
+
+    watched_model(features.clone())
+
+    assert analyser.to_dict()["0"]["features_rank"] == 2
+
+
+@pytest.mark.parametrize("n", [-1, 0])
+def test_covariance_spectrum_non_positive_sample_size_uses_full_dimension(n):
+    features = torch.tensor([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+    analyser = CovarianceSpectrumStatisticsAnalyser(n=n)
+    watched_model = interject_by_name(
+        nn.Sequential(nn.Identity()),
+        "0",
+        analyser,
+    )
+
+    watched_model(features)
+
+    result = analyser.to_dict()["0"]
+    assert result["features_dim"] == 3
+    assert result["features_rank"] == 3
+    assert result["normalized_features_rank"] == 1.0
 
 
 @pytest.mark.parametrize(

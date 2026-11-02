@@ -19,7 +19,7 @@ class _FeatureRows:
             return
 
         if self.limit <= 0:
-            self.batches.append(features)
+            self.batches.append(features.clone())
             return
 
         priorities = torch.rand(features.shape[0], device=features.device)
@@ -289,12 +289,13 @@ class CovarianceSpectrumStatisticsAnalyser(RankAnalyser):
         self.taps = taps
 
     def finalise_result(self, name, result) -> dict:
-        stats = compute_cov_spectrum_stats(result.covariance(),
+        covariance = result.covariance()
+        stats = compute_cov_spectrum_stats(covariance,
                                            threshold=self.threshold,
                                            taps=self.taps)
         stats['features_dim'] = self.features_dim[name]
 
-        norm = min(self.features_dim[name], self.n)
+        norm = covariance.shape[0]
         stats['normalized_features_rank'] = stats['features_rank'] / norm
 
         return stats
