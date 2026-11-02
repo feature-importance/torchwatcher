@@ -4,7 +4,13 @@ import torch
 from torch import nn
 from torch.utils.data import TensorDataset
 
-from torchwatcher.analysis import Analyser, AnalyserList, NameAnalyser
+from torchwatcher.analysis import (
+    Analyser,
+    AnalyserList,
+    NameAnalyser,
+    PerClassAnalyser,
+    PerClassVersusAnalyser,
+)
 from torchwatcher.interjection import interject_by_name
 
 
@@ -14,6 +20,12 @@ class _OutputGradientAnalyser(Analyser):
 
     def process_batch_state(self, name, state, working_results):
         return state.output_gradients.detach().clone()
+
+
+class _BatchSizeAnalyser(Analyser):
+    def process_batch_state(self, name, state, working_results):
+        count = 0 if working_results is None else working_results
+        return count + state.outputs.shape[0]
 
 
 class TestAnalyserRun(unittest.TestCase):
@@ -117,6 +129,65 @@ class TestAnalyserList(unittest.TestCase):
             torch.ones(1, 2),
         )
         self.assertEqual(gradient_analyser.current_states, {})
+
+
+class TestPerClassAnalyser(unittest.TestCase):
+    def test_reset_discards_child_results(self):
+        analyser = PerClassAnalyser(_BatchSizeAnalyser())
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        analyser.targets = torch.tensor([0, 1])
+
+        watched(torch.ones(2, 1))
+        self.assertEqual(analyser.to_dict(), {0: {"0": 1}, 1: {"0": 1}})
+
+        analyser.reset()
+
+        self.assertEqual(analyser.to_dict(), {})
+
+    def test_versus_reuses_scalar_class_keys_across_batches(self):
+        analyser = PerClassVersusAnalyser(_BatchSizeAnalyser())
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+
+        for _ in range(2):
+            analyser.targets = torch.tensor([0, 1, 0])
+            watched(torch.ones(3, 1))
+
+        self.assertEqual(
+            analyser.to_dict(),
+            {
+                0: {"0": 4},
+                "~0": {"0": 2},
+                1: {"0": 2},
+                "~1": {"0": 4},
+            },
+        )
+
+    def test_versus_uses_class_complement_for_backward(self):
+        analyser = PerClassVersusAnalyser(_OutputGradientAnalyser())
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        analyser.targets = torch.tensor([0, 1, 0])
+        inputs = torch.ones(3, 1, requires_grad=True)
+        weights = torch.tensor([[1.0], [2.0], [3.0]])
+
+        (watched(inputs) * weights).sum().backward()
+
+        result = analyser.to_dict()
+        torch.testing.assert_close(result[0]["0"], weights[[0, 2]])
+        torch.testing.assert_close(result["~0"]["0"], weights[[1]])
+        torch.testing.assert_close(result[1]["0"], weights[[1]])
+        torch.testing.assert_close(result["~1"]["0"], weights[[0, 2]])
 
 
 if __name__ == "__main__":

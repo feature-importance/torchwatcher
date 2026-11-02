@@ -574,7 +574,7 @@ class CrossCovariance(Stat):
         assert a.shape[0] == b.shape[0]
         if len(a.shape) > 2:
             a, b = [
-                d.view(d.shape[0], d.shape[1], -1)
+                d.reshape(d.shape[0], d.shape[1], -1)
                 .permute(0, 2, 1)
                 .reshape(-1, d.shape[1])
                 for d in [a, b]

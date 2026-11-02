@@ -761,6 +761,11 @@ class PerClassAnalyser(Analyser[Any]):
         self.analyser = analyser
         self.analysers = {}
 
+    def reset(self):
+        super().reset()
+        self.analyser.reset()
+        self.analysers = {}
+
     def log_forward(self, name, module, inputs, outputs):
         if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):
             return
@@ -813,33 +818,53 @@ class PerClassVersusAnalyser(PerClassAnalyser):
         super().__init__(analyser)
 
     def log_forward(self, name, module, inputs, outputs):
+        if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):
+            return
+
         classes = self.targets
 
-        for c in classes.unique():
+        for class_value in classes.unique():
+            c = class_value.cpu().item() if class_value.numel() == 1 else class_value
+            class_mask = classes == class_value
+            complement_mask = ~class_mask
+            complement_key = f"~{c}"
+
             if c not in self.analysers:
                 self.analysers[c] = copy.deepcopy(self.analyser)
-                self.analysers[f"~{c}"] = copy.deepcopy(self.analyser)
+                self.analysers[complement_key] = copy.deepcopy(self.analyser)
 
             analyser = self.analysers[c]
-            analyser.targets = self.targets[classes == c]
-            analyser.log_forward(name, module, inputs[classes == c],
-                                 outputs[classes == c])
+            analyser.targets = self.targets[class_mask]
+            analyser.log_forward(name, module, inputs[class_mask],
+                                 outputs[class_mask])
 
-            analyser = self.analysers[f"~{c}"]
-            analyser.targets = self.targets[classes != c]
-            analyser.log_forward(name, module, inputs[classes != c],
-                                 outputs[classes != c])
+            if torch.any(complement_mask):
+                analyser = self.analysers[complement_key]
+                analyser.targets = self.targets[complement_mask]
+                analyser.log_forward(name, module, inputs[complement_mask],
+                                     outputs[complement_mask])
 
     def log_backward(self, name, module, grad_input, grad_output):
         classes = self.targets
 
-        for c, analyser in self.analysers.items():
-            if "~" in str(c):
-                analyser.log_backward(name, module, grad_input[classes != c],
-                                      grad_output[classes != c])
-            else:
-                analyser.log_backward(name, module, grad_input[classes == c],
-                                      grad_output[classes == c])
+        for class_value in classes.unique():
+            c = class_value.cpu().item() if class_value.numel() == 1 else class_value
+            class_mask = classes == class_value
+            complement_mask = ~class_mask
+
+            self.analysers[c].log_backward(
+                name,
+                module,
+                grad_input[class_mask],
+                grad_output[class_mask],
+            )
+            if torch.any(complement_mask):
+                self.analysers[f"~{c}"].log_backward(
+                    name,
+                    module,
+                    grad_input[complement_mask],
+                    grad_output[complement_mask],
+                )
 
 
 class NameAnalyser(Analyser[str]):

@@ -457,9 +457,15 @@ def trace_shapes(model: DualGraphModule, *args):
     from torch._subclasses.fake_tensor import FakeTensorMode
     torch._functorch.config.fake_tensor_prefer_device_type = 'meta'
 
-    with FakeTensorMode(allow_non_fake_inputs=True):
-        ShapeProp(model.train_module).propagate(*args)
-        ShapeProp(model.eval_module).propagate(*args)
+    was_training = model.training
+    try:
+        with FakeTensorMode(allow_non_fake_inputs=True):
+            model.train_module.train()
+            ShapeProp(model.train_module).propagate(*args)
+            model.eval_module.eval()
+            ShapeProp(model.eval_module).propagate(*args)
+    finally:
+        model.train(was_training)
 
 
 def trim(network: fx.GraphModule):

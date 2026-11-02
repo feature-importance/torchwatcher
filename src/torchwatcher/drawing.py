@@ -130,9 +130,15 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
                 )
                 dot_node.add_node(pydot.Node(name + "/" + node.name, style='invis', label="", width=0, height=0, margin=0))
                 if isinstance(md, Analyser):
-                    gm = md.interjection._wrapped[node.args[0]]
+                    gm = md.interjection.wrapped_module(
+                        node.args[0],
+                        training=graph_module.training,
+                    )
                 else:
-                    gm = md._wrapped[node.args[0]]
+                    gm = md.wrapped_module(
+                        node.args[0],
+                        training=graph_module.training,
+                    )
 
                 wrapped_nodes.add(node)
 

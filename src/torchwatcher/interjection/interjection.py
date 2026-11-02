@@ -113,14 +113,22 @@ class WrappedForwardInterjection(Interjection):
     def register_original_module(self, name: str, module: nn.Module | None):
         self._original_modules[self._registration_key(name)] = module
 
+    def _registered_key(self, name: str, training: bool | None = None):
+        if training is None:
+            training = self.training
+        key = (name, training)
+        return key if key in self._wrapped else name
+
+    def wrapped_module(self, name: str, training: bool | None = None):
+        """Return the wrapped module registered for the requested mode."""
+        return self._wrapped[self._registered_key(name, training)]
+
     @abc.abstractmethod
     def process(self, name: str, module: [None | nn.Module], inputs, outputs):
         pass
 
     def forward(self, name, *args, **kwargs):
-        key = (name, self.training)
-        if key not in self._wrapped:
-            key = name
+        key = self._registered_key(name)
         y = self._wrapped[key](*args, **kwargs)
 
         return unpack(

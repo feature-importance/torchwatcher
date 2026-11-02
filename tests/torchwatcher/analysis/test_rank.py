@@ -1,3 +1,4 @@
+import pytest
 import torch
 from torch import nn
 
@@ -78,3 +79,51 @@ def test_rank_analyser_accepts_non_contiguous_activations():
 
     result = analyser.to_dict()["0"]
     assert result["features_dim"] == 8
+
+
+def test_rank_analyser_non_positive_sample_size_uses_every_feature():
+    features = torch.tensor([
+        [0.0, 0.0, 0.0],
+        [1.0, 2.0, 0.0],
+        [2.0, 4.0, 1.0],
+        [3.0, 6.0, 0.0],
+    ])
+    analyser = RankAnalyser(n=-1)
+    watched_model = interject_by_name(
+        nn.Sequential(nn.Identity()),
+        "0",
+        analyser,
+    )
+
+    watched_model(features)
+
+    assert analyser.to_dict()["0"]["features_rank"] == 2
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_rank"),
+    [("aTa", 2), ("aaT", 1), ("a", 1)],
+)
+def test_rank_analyser_samples_the_axis_selected_by_mode(mode, expected_rank):
+    values = torch.arange(16)
+    features = torch.stack([
+        2 * ((values >> bit) & 1) - 1
+        for bit in range(4)
+    ], dim=1)
+    features = features.float()
+    analyser = RankAnalyser(mode=mode, n=2)
+    watched_model = interject_by_name(
+        nn.Sequential(nn.Identity()),
+        "0",
+        analyser,
+    )
+
+    watched_model(features[:8])
+    watched_model(features[8:])
+
+    assert analyser.to_dict()["0"]["features_rank"] == expected_rank
+
+
+def test_rank_analyser_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="Unknown mode"):
+        RankAnalyser(mode="unknown")

@@ -5,6 +5,39 @@ from .analysis import Analyser, AnalyserState
 from .running_stats import Covariance
 
 
+class _FeatureRows:
+    """Keep either every feature row or a bounded uniform sample."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.batches = []
+        self.sample = None
+        self.priorities = None
+
+    def add(self, features: torch.Tensor):
+        if features.shape[0] == 0:
+            return
+
+        if self.limit <= 0:
+            self.batches.append(features)
+            return
+
+        priorities = torch.rand(features.shape[0], device=features.device)
+        if self.sample is not None:
+            features = torch.cat((self.sample, features))
+            priorities = torch.cat((self.priorities, priorities))
+
+        count = min(self.limit, features.shape[0])
+        indices = priorities.topk(count).indices
+        self.sample = features[indices]
+        self.priorities = priorities[indices]
+
+    def value(self) -> torch.Tensor:
+        if self.limit > 0:
+            return self.sample
+        return torch.cat(self.batches)
+
+
 def estimate_rank(features: torch.Tensor,
                   n: int = 8000,
                   mode: str = 'aTa',
@@ -94,36 +127,73 @@ class RankAnalyser(Analyser):
         self.mode = mode
         self.threshold = threshold
 
+        if mode not in {'aTa', 'aaT', 'a'}:
+            raise ValueError('Unknown mode')
+
     def process_batch_state(self,
                             name: str,
                             state: AnalyserState,
-                            working_results: Covariance | None) -> Covariance:
-        if working_results is None:
-            working_results = Covariance()
-
+                            name_result: Covariance | _FeatureRows | None
+                            ) -> Covariance | _FeatureRows:
         features = state.outputs.detach()
-
         f = features.reshape(features.shape[0], -1)
-        if not name in self.indices:
+
+        if name not in self.features_dim:
             self.features_dim[name] = f.shape[1]
-            self.indices[name] = torch.randperm(f.shape[1])[:self.n]
+        elif self.features_dim[name] != f.shape[1]:
+            raise ValueError(
+                f"feature dimension for {name!r} changed from "
+                f"{self.features_dim[name]} to {f.shape[1]}"
+            )
 
-        f = f[:, self.indices[name]]
-        working_results.add(f)
+        if self.mode == 'aTa':
+            if name_result is None:
+                name_result = Covariance()
+            if name not in self.indices:
+                self.indices[name] = (
+                    torch.randperm(f.shape[1])[:self.n]
+                    if self.n > 0 else None
+                )
+            if self.indices[name] is not None:
+                f = f[:, self.indices[name].to(f.device)]
+            name_result.add(f)
+            return name_result
 
-        return working_results
+        if name_result is None:
+            name_result = _FeatureRows(self.n)
+        name_result.add(f)
 
-    def finalise_result(self, name: str, result: Covariance) -> dict:
+        return name_result
+
+    def finalise_result(
+            self,
+            name: str,
+            result: Covariance | _FeatureRows,
+    ) -> dict:
         try:
-            covar = result.covariance()
-            rank = matrix_rank(covar, hermitian=True,
-                               rtol=self.threshold).cpu().item()
+            if self.mode == 'aTa':
+                covar = result.covariance()
+                rank = matrix_rank(
+                    covar,
+                    hermitian=True,
+                    rtol=self.threshold,
+                ).cpu().item()
+                sampled_dimension = covar.shape[0]
+            else:
+                features = result.value()
+                rank = estimate_rank(
+                    features,
+                    n=-1,
+                    mode=self.mode,
+                    threshold=self.threshold,
+                )
+                sampled_dimension = features.shape[0]
 
             rec = dict()
             rec['features_rank'] = rank
             rec['features_dim'] = self.features_dim[name]
 
-            norm = min(self.features_dim[name], covar.shape[0])
+            norm = min(self.features_dim[name], sampled_dimension)
             rec['normalized_features_rank'] = rank / norm
 
             return rec
