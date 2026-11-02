@@ -1,8 +1,21 @@
 import torch
+import pytest
 from torch import nn
 
 from torchwatcher.interjection import replace
 from torchwatcher.interjection.node_selector import matches_module_class
+
+
+class _RaisesInEval(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(1, 1)
+
+    def forward(self, inputs):
+        outputs = self.linear(inputs)
+        if not self.training:
+            raise RuntimeError("eval tracing failed")
+        return outputs
 
 
 def test_parameterised_replacement_is_shared_between_train_and_eval():
@@ -40,3 +53,38 @@ def test_parameterised_replacement_is_shared_between_train_and_eval():
         replaced(torch.ones(1, 1)),
         torch.tensor([[0.9]]),
     )
+
+
+def test_replace_restores_source_mode_after_failure():
+    model = _RaisesInEval()
+    model.train()
+
+    with pytest.raises(RuntimeError, match="eval tracing failed"):
+        replace(
+            model,
+            matches_module_class(nn.Linear),
+            lambda original: nn.Linear(
+                original.in_features,
+                original.out_features,
+            ),
+        )
+
+    assert model.training
+
+
+def test_replace_does_not_mutate_tracer_kwargs():
+    leaf_modules = [_RaisesInEval]
+    tracer_kwargs = {"leaf_modules": leaf_modules}
+
+    replace(
+        nn.Sequential(nn.Linear(1, 1)),
+        matches_module_class(nn.Linear),
+        lambda original: nn.Linear(
+            original.in_features,
+            original.out_features,
+        ),
+        tracer_kwargs=tracer_kwargs,
+    )
+
+    assert tracer_kwargs == {"leaf_modules": [_RaisesInEval]}
+    assert tracer_kwargs["leaf_modules"] is leaf_modules

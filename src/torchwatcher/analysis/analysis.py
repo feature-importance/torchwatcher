@@ -785,12 +785,20 @@ class PerClassAnalyser(Analyser[Any]):
         super().__init__(gradient=analyser.gradient)
 
         self.analyser = analyser
+        self._class_analysers = nn.ModuleList()
         self.analysers = {}
 
     def reset(self):
         super().reset()
         self.analyser.reset()
+        self._class_analysers = nn.ModuleList()
         self.analysers = {}
+
+    def _create_class_analyser(self, key):
+        analyser = copy.deepcopy(self.analyser)
+        self._class_analysers.append(analyser)
+        self.analysers[key] = analyser
+        return analyser
 
     @Analyser.enabled.setter
     def enabled(self, value: bool):
@@ -810,7 +818,7 @@ class PerClassAnalyser(Analyser[Any]):
                 c = c.cpu().item()
 
             if c not in self.analysers:
-                self.analysers[c] = copy.deepcopy(self.analyser)
+                self._create_class_analyser(c)
 
             analyser = self.analysers[c]
             analyser.targets = self.targets[classes == c]
@@ -822,7 +830,7 @@ class PerClassAnalyser(Analyser[Any]):
     def log_backward(self, name, module, grad_input, grad_output):
         if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):
             return
-            
+
         classes = self.targets
 
         for c, analyser in self.analysers.items():
@@ -866,8 +874,8 @@ class PerClassVersusAnalyser(PerClassAnalyser):
             complement_key = f"~{c}"
 
             if c not in self.analysers:
-                self.analysers[c] = copy.deepcopy(self.analyser)
-                self.analysers[complement_key] = copy.deepcopy(self.analyser)
+                self._create_class_analyser(c)
+                self._create_class_analyser(complement_key)
 
             analyser = self.analysers[c]
             analyser.targets = self.targets[class_mask]

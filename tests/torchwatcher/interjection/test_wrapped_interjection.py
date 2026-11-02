@@ -309,6 +309,38 @@ class _ModeRecorder(nn.Module):
         return inputs
 
 
+class _RaisesInEval(nn.Module):
+    def forward(self, inputs):
+        if not self.training:
+            raise RuntimeError("eval tracing failed")
+        return inputs
+
+
+def test_trace_restores_source_mode_after_failure():
+    model = _RaisesInEval()
+    model.train()
+
+    with pytest.raises(RuntimeError, match="eval tracing failed"):
+        trace(model)
+
+    assert model.training
+
+
+def test_interjection_does_not_mutate_tracer_kwargs():
+    leaf_modules = [_ModeRecorder]
+    tracer_kwargs = {"leaf_modules": leaf_modules}
+
+    interject_by_module_class(
+        nn.Sequential(nn.ReLU()),
+        nn.ReLU,
+        NameAnalyser(),
+        tracer_kwargs=tracer_kwargs,
+    )
+
+    assert tracer_kwargs == {"leaf_modules": [_ModeRecorder]}
+    assert tracer_kwargs["leaf_modules"] is leaf_modules
+
+
 def test_trace_shapes_uses_each_graphs_corresponding_mode():
     _ModeRecorder.observations = []
     watched_model = trace(

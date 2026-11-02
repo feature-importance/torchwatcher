@@ -79,6 +79,14 @@ class HierarchyTracer(NodePathTracer):
         return node
 
 
+def _copy_tracer_kwargs(
+        tracer_kwargs: Optional[dict[str, Any]]) -> dict[str, Any]:
+    copied = {} if tracer_kwargs is None else dict(tracer_kwargs)
+    if "leaf_modules" in copied:
+        copied["leaf_modules"] = list(copied["leaf_modules"])
+    return copied
+
+
 def _set_default_tracer_kwargs(original_tr_kwargs: Optional[dict[str, Any]]) -> dict[str, Any]:
     # This is copied from torchvision.models.feature_extraction, but modified so that it doesn't
     # block tracing inside torchvision.ops (you can manually add those modules to the tracer_kwargs
@@ -86,7 +94,7 @@ def _set_default_tracer_kwargs(original_tr_kwargs: Optional[dict[str, Any]]) -> 
     # like tracing ReLUs might miss some!)
     default_autowrap_modules = (math, torchvision.ops)
     default_leaf_modules = []
-    result_tracer_kwargs = {} if original_tr_kwargs is None else original_tr_kwargs
+    result_tracer_kwargs = _copy_tracer_kwargs(original_tr_kwargs)
     result_tracer_kwargs["autowrap_modules"] = (
         tuple(set(result_tracer_kwargs["autowrap_modules"] + default_autowrap_modules))
         if "autowrap_modules" in result_tracer_kwargs
@@ -339,8 +347,7 @@ def interject_by_module_class(model: nn.Module,
         the interjected model
     """
 
-    if tracer_kwargs is None:
-        tracer_kwargs = {}
+    tracer_kwargs = _copy_tracer_kwargs(tracer_kwargs)
     if 'leaf_modules' not in tracer_kwargs:
         tracer_kwargs['leaf_modules'] = []
     tracer_kwargs['leaf_modules'].append(target_module_class)
@@ -368,40 +375,43 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
     """
     is_training = model.training
 
-    if tracer_kwargs is None:
-        tracer_kwargs = {}
+    tracer_kwargs = _copy_tracer_kwargs(tracer_kwargs)
     if 'leaf_modules' not in tracer_kwargs:
         tracer_kwargs['leaf_modules'] = []
     tracer_kwargs['leaf_modules'].append(GradientIdentity)
 
-    graphmodules = {}
-    for mode in ["train", "eval"]:
-        if mode == "train":
-            model.train()
-        elif mode == "eval":
-            model.eval()
+    try:
+        graphmodules = {}
+        for mode in ["train", "eval"]:
+            if mode == "train":
+                model.train()
+            elif mode == "eval":
+                model.eval()
 
-        traced = symbolic_trace(model, tracer_kwargs=tracer_kwargs)
-        for node in traced.graph.nodes:
-            if selector is not None and selector.fn((traced, node)):
-                insert_interjection(
-                    traced,
-                    node,
-                    interjection,
-                    training=mode == "train",
-                )
+            traced = symbolic_trace(model, tracer_kwargs=tracer_kwargs)
+            for node in traced.graph.nodes:
+                if selector is not None and selector.fn((traced, node)):
+                    insert_interjection(
+                        traced,
+                        node,
+                        interjection,
+                        training=mode == "train",
+                    )
 
-        traced.graph.eliminate_dead_code()
-        traced.delete_all_unused_submodules()
-        traced.recompile()
-        graphmodules[mode] = traced
+            traced.graph.eliminate_dead_code()
+            traced.delete_all_unused_submodules()
+            traced.recompile()
+            graphmodules[mode] = traced
 
-    # Build the final graph module
-    graph_module = DualGraphModule(graphmodules["train"], graphmodules["eval"],
-                                   class_name="DualGraphModule_" + _get_name(model))
+        # Build the final graph module
+        graph_module = DualGraphModule(
+            graphmodules["train"],
+            graphmodules["eval"],
+            class_name="DualGraphModule_" + _get_name(model),
+        )
+    finally:
+        model.train(is_training)
 
-    # Restore original training mode
-    model.train(is_training)
     graph_module.train(is_training)
 
     return graph_module

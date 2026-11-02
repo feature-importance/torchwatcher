@@ -6,7 +6,12 @@ from typing import Optional, Dict, Any, Callable, Type
 
 from .node_selector import NodeSelector
 from ..nn import GradientIdentity
-from .tracing import symbolic_trace, DualGraphModule, _get_name
+from .tracing import (
+    symbolic_trace,
+    DualGraphModule,
+    _copy_tracer_kwargs,
+    _get_name,
+)
 
 
 def _replace_module(model: nn.Module, selector: NodeSelector,
@@ -29,8 +34,7 @@ def _replace_module(model: nn.Module, selector: NodeSelector,
     Returns:
         the new model with replacements made.
     """
-    if tracer_kwargs is None:
-        tracer_kwargs = {}
+    tracer_kwargs = _copy_tracer_kwargs(tracer_kwargs)
     if 'leaf_modules' not in tracer_kwargs:
         tracer_kwargs['leaf_modules'] = []
     tracer_kwargs['leaf_modules'].append(GradientIdentity)
@@ -104,48 +108,48 @@ def replace(model: nn.Module, selector: NodeSelector,
     """
     is_training = model.training
 
-    if tracer_kwargs is None:
-        tracer_kwargs = {}
-    if 'leaf_modules' not in tracer_kwargs:
-        tracer_kwargs['leaf_modules'] = []
-    tracer_kwargs['leaf_modules'].append(GradientIdentity)
+    tracer_kwargs = _copy_tracer_kwargs(tracer_kwargs)
 
-    graphs = {}
-    graphmodules = {}
-    replacements = {}
-    for mode in ["train", "eval"]:
-        if mode == "train":
-            model.train()
-        elif mode == "eval":
-            model.eval()
+    try:
+        graphs = {}
+        graphmodules = {}
+        replacements = {}
+        for mode in ["train", "eval"]:
+            if mode == "train":
+                model.train()
+            elif mode == "eval":
+                model.eval()
 
-        traced = _replace_module(
-            model,
-            selector,
-            create_replacement,
-            replacements,
-            tracer_kwargs,
-            class_name_prefix,
+            traced = _replace_module(
+                model,
+                selector,
+                create_replacement,
+                replacements,
+                tracer_kwargs,
+                class_name_prefix,
+            )
+            graphs[mode] = traced.graph
+            graphmodules[mode] = traced
+
+        for mode in ["train", "eval"]:
+            # inserting the replacements might have added modules to the traced
+            # GraphModule, but not the underlying model. We copy those added modules
+            # over.
+            # We do this in a separate loop in case changes to val influence train
+            model_modules = dict(model.named_modules())
+            for name, module in traced.named_children():
+                if name not in model_modules:
+                    model.add_module(name, module)
+
+        # Build the final graph module
+        graph_module = DualGraphModule(
+            graphmodules["train"],
+            graphmodules["eval"],
+            class_name="DualGraphModule_" + _get_name(model),
         )
-        graphs[mode] = traced.graph
-        graphmodules[mode] = traced
+    finally:
+        model.train(is_training)
 
-    for mode in ["train", "eval"]:
-        # inserting the replacements might have added modules to the traced
-        # GraphModule, but not the underlying model. We copy those added modules
-        # over.
-        # We do this in a separate loop in case changes to val influence train
-        model_modules = dict(model.named_modules())
-        for name, module in traced.named_children():
-            if name not in model_modules:
-                model.add_module(name, module)
-
-    # Build the final graph module
-    graph_module = DualGraphModule(graphmodules["train"], graphmodules["eval"],
-                                   class_name="DualGraphModule_" + _get_name(model))
-
-    # Restore original training mode
-    model.train(is_training)
     graph_module.train(is_training)
 
     return graph_module

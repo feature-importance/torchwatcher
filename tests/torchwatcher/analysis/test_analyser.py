@@ -28,6 +28,12 @@ class _BatchSizeAnalyser(Analyser):
         return count + state.outputs.shape[0]
 
 
+class _BufferedAnalyser(_BatchSizeAnalyser):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("marker", torch.ones(1))
+
+
 class TestAnalyserRun(unittest.TestCase):
     def test_runs_a_regular_analyser_over_a_dataset(self):
         analyser = NameAnalyser()
@@ -182,6 +188,29 @@ class TestAnalyserEnablement(unittest.TestCase):
 
 
 class TestPerClassAnalyser(unittest.TestCase):
+    def test_children_follow_module_lifecycle(self):
+        analyser = PerClassAnalyser(_BufferedAnalyser())
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        analyser.targets = torch.tensor([0])
+
+        watched(torch.ones(1, 1))
+        child = analyser.analysers[0]
+        analyser.eval()
+        analyser.to(dtype=torch.float64)
+
+        self.assertFalse(child.training)
+        self.assertEqual(child.marker.dtype, torch.float64)
+        self.assertIn("_class_analysers.0.marker", analyser.state_dict())
+
+        analyser.reset()
+
+        self.assertEqual(len(analyser._class_analysers), 0)
+        self.assertNotIn("_class_analysers.0.marker", analyser.state_dict())
+
     def test_reset_discards_child_results(self):
         analyser = PerClassAnalyser(_BatchSizeAnalyser())
         watched = interject_by_name(
