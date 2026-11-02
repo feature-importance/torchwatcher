@@ -33,6 +33,15 @@ class _ScaleBackward(WrappedForwardBackwardInterjection):
         return grad_input * 2
 
 
+class _RecordBackward(WrappedForwardBackwardInterjection):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def process_backward(self, name, module, grad_input, grad_output):
+        self.calls += 1
+
+
 def test_wrapped_interjection_receives_underlying_module_for_module_call():
     interjection = _ModuleRecorder()
     watched_model = interject_by_module_class(
@@ -68,6 +77,86 @@ def test_wrapped_backward_interjection_accepts_single_tensor_gradient():
     watched_model(inputs).sum().backward()
 
     torch.testing.assert_close(inputs.grad, torch.full_like(inputs, 2.0))
+
+
+class _FunctionalInplaceReLU(nn.Module):
+    def forward(self, inputs):
+        return F.relu(inputs, inplace=True)
+
+
+class _FunctionInplaceReLU(nn.Module):
+    def forward(self, inputs):
+        return torch.relu_(inputs)
+
+
+class _MethodInplaceReLU(nn.Module):
+    def forward(self, inputs):
+        return inputs.relu_()
+
+
+@pytest.mark.parametrize(
+    ("model", "node_match"),
+    [
+        (
+            _FunctionalInplaceReLU(),
+            lambda node: (
+                node.op == "call_function" and node.target is F.relu
+            ),
+        ),
+        (
+            _FunctionInplaceReLU(),
+            lambda node: (
+                node.op == "call_function" and node.target is torch.relu_
+            ),
+        ),
+        (
+            _MethodInplaceReLU(),
+            lambda node: (
+                node.op == "call_method" and node.target == "relu_"
+            ),
+        ),
+    ],
+)
+def test_backward_interjection_makes_functional_inplace_node_out_of_place(
+        model,
+        node_match):
+    interjection = _RecordBackward()
+    watched_model = interject_by_match(
+        model,
+        NodeSelector(lambda state: node_match(state[1])),
+        interjection,
+    )
+    source_inputs = torch.tensor([-1.0, 2.0])
+    source_outputs = model(source_inputs)
+    inputs = torch.tensor([-1.0, 2.0], requires_grad=True)
+
+    outputs = watched_model(inputs)
+    outputs.sum().backward()
+
+    assert source_outputs.data_ptr() == source_inputs.data_ptr()
+    torch.testing.assert_close(outputs, torch.tensor([0.0, 2.0]))
+    torch.testing.assert_close(inputs.grad, torch.tensor([0.0, 1.0]))
+    assert interjection.calls == 1
+
+
+class _UnsupportedInplaceMethod(nn.Module):
+    def forward(self, inputs):
+        return inputs.zero_()
+
+
+def test_backward_interjection_rejects_unsupported_inplace_method():
+    selector = NodeSelector(
+        lambda state: (
+            state[1].op == "call_method" and state[1].target == "zero_"
+        )
+    )
+
+    with pytest.raises(ValueError, match="no out-of-place counterpart"):
+        interject_by_match(
+            _UnsupportedInplaceMethod(),
+            selector,
+            _RecordBackward(),
+        )
 
 
 def test_interjection_does_not_mutate_source_model():

@@ -1,4 +1,5 @@
 import copy
+import importlib
 from typing import Type, Optional, Dict, Any, Union, Callable
 
 import math
@@ -12,7 +13,12 @@ from torch.fx.proxy import Scope, ScopeContextManager
 from torchvision.models.feature_extraction import NodePathTracer
 
 from torchwatcher.interjection.node_selector import node_selector
-from .interjection import Interjection, ForwardInterjection, WrappedForwardInterjection
+from .interjection import (
+    Interjection,
+    ForwardInterjection,
+    WrappedForwardBackwardInterjection,
+    WrappedForwardInterjection,
+)
 from .node_selector import NodeSelector, matches_module_class
 from ..nn import GradientIdentity
 
@@ -218,7 +224,12 @@ def add_interjection(graph_module: fx.GraphModule,
     return interjection_name
 
 
-def handle_inplace(graph_module: fx.GraphModule, node: fx.Node) -> fx.Node:
+def handle_inplace(
+        graph_module: fx.GraphModule,
+        node: fx.Node,
+        *,
+        require_out_of_place: bool = False,
+) -> fx.Node:
     # handle modules with 'inplace' flags
     if (node.op == 'call_module' and
             hasattr(graph_module.get_submodule(node.target), 'inplace')):
@@ -227,9 +238,37 @@ def handle_inplace(graph_module: fx.GraphModule, node: fx.Node) -> fx.Node:
         graph_module.set_submodule(node.target, module)
         return node
 
-    # TODO: call_function with a kwarg called 'inplace'
+    if node.op == 'call_function':
+        if node.kwargs.get('inplace') is True:
+            node.kwargs = {**node.kwargs, 'inplace': False}
 
-    # TODO: call_function with a name ending in underscore
+        target_name = getattr(node.target, '__name__', None)
+        if target_name is not None and target_name.endswith('_'):
+            module_name = getattr(node.target, '__module__', None)
+            replacement = None
+            if module_name is not None:
+                target_module = importlib.import_module(module_name)
+                replacement = getattr(target_module, target_name[:-1], None)
+
+            if replacement is not None:
+                node.target = replacement
+            elif require_out_of_place:
+                raise ValueError(
+                    f"cannot wrap in-place function {node.target!r} with a "
+                    "backward interjection: no out-of-place counterpart was "
+                    "found"
+                )
+
+    if node.op == 'call_method' and node.target.endswith('_'):
+        replacement = node.target[:-1]
+        if hasattr(torch.Tensor, replacement):
+            node.target = replacement
+        elif require_out_of_place:
+            raise ValueError(
+                f"cannot wrap in-place method {node.target!r} with a "
+                "backward interjection: no out-of-place counterpart was "
+                "found"
+            )
 
     return node
 
@@ -271,7 +310,14 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
         if node.op == 'call_module'
         else None
     )
-    node = handle_inplace(graph_module, node)
+    node = handle_inplace(
+        graph_module,
+        node,
+        require_out_of_place=(
+            isinstance(interjection, WrappedForwardBackwardInterjection)
+            or getattr(interjection, 'gradient', False)
+        ),
+    )
 
     if hasattr(interjection, '_wrapped'):
         with graph_module.graph.inserting_after(node):
