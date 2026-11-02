@@ -186,9 +186,15 @@ class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
                  grad_input: [tuple[torch.Tensor, ...] | torch.Tensor],
                  grad_output: [tuple[torch.Tensor, ...] | torch.Tensor]) -> \
                 [tuple[torch.Tensor] | torch.Tensor | None]:
-            return self.process_backward(name, self._original_modules[key],
-                                         unpack(grad_input),
-                                         unpack(grad_output))
+            processed = self.process_backward(
+                name,
+                self._original_modules[key],
+                unpack(grad_input),
+                unpack(grad_output),
+            )
+            if processed is None or isinstance(processed, tuple):
+                return processed
+            return (processed,)
 
         self._handles[key] = module.register_full_backward_hook(hook)
 

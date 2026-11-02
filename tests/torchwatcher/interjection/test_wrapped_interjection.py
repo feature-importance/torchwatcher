@@ -6,6 +6,7 @@ from torch import nn
 from torchwatcher.analysis import NameAnalyser
 from torchwatcher.drawing import draw_graph, draw_graph_pretty
 from torchwatcher.interjection import (
+    WrappedForwardBackwardInterjection,
     WrappedForwardInterjection,
     interject_by_match,
     interject_by_module_class,
@@ -25,6 +26,11 @@ class _ModuleRecorder(WrappedForwardInterjection):
     def process(self, name, module, inputs, outputs):
         self.names.append(name)
         self.modules.append(module)
+
+
+class _ScaleBackward(WrappedForwardBackwardInterjection):
+    def process_backward(self, name, module, grad_input, grad_output):
+        return grad_input * 2
 
 
 def test_wrapped_interjection_receives_underlying_module_for_module_call():
@@ -48,6 +54,20 @@ def test_wrapped_interjection_receives_underlying_module_for_module_call():
         interjection.modules[0].weight is parameter
         for parameter in watched_model.parameters()
     )
+
+
+def test_wrapped_backward_interjection_accepts_single_tensor_gradient():
+    interjection = _ScaleBackward()
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.Identity()),
+        nn.Identity,
+        interjection,
+    )
+    inputs = torch.ones(2, requires_grad=True)
+
+    watched_model(inputs).sum().backward()
+
+    torch.testing.assert_close(inputs.grad, torch.full_like(inputs, 2.0))
 
 
 def test_interjection_does_not_mutate_source_model():
