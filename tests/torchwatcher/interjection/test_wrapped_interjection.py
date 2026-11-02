@@ -315,6 +315,28 @@ def test_analyser_mode_does_not_select_wrapped_operation(
     assert analyser.training is analyser_training
 
 
+@pytest.mark.parametrize("model_training", [True, False])
+@pytest.mark.parametrize("analyser_training", [True, False])
+def test_analyser_mode_does_not_change_wrapped_module_operation(
+        model_training,
+        analyser_training):
+    analyser = NameAnalyser()
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.Dropout(p=1.0)),
+        nn.Dropout,
+        analyser,
+    )
+    inputs = torch.ones(4)
+
+    watched_model.train(model_training)
+    analyser.train(analyser_training)
+    result = watched_model(inputs)
+
+    expected = torch.zeros_like(inputs) if model_training else inputs
+    torch.testing.assert_close(result, expected)
+    assert analyser.training is analyser_training
+
+
 def test_drawing_resolves_mode_aware_analyser_interjection():
     watched_model = interject_by_name(
         nn.Sequential(nn.ReLU()),

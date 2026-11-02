@@ -123,6 +123,18 @@ class WrappedForwardInterjection(Interjection):
         """Return the wrapped module registered for the requested mode."""
         return self._wrapped[self._registered_key(name, training)]
 
+    def train(self, mode: bool = True):
+        super().train(mode)
+
+        # The train and eval graphs select these wrappers explicitly during
+        # forward. Keep each extracted operation in the mode it represents so
+        # independently training an analyser cannot change model behaviour.
+        for key, module in self._wrapped.items():
+            if isinstance(key, tuple):
+                module.train(key[1])
+
+        return self
+
     @abc.abstractmethod
     def process(self, name: str, module: [None | nn.Module], inputs, outputs):
         pass
