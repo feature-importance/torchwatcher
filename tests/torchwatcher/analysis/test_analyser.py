@@ -1,3 +1,4 @@
+import copy
 import unittest
 
 import torch
@@ -11,7 +12,8 @@ from torchwatcher.analysis import (
     PerClassAnalyser,
     PerClassVersusAnalyser,
 )
-from torchwatcher.interjection import interject_by_name
+from torchwatcher.interjection import interject_by_match, interject_by_name
+from torchwatcher.interjection.node_selector import NodeSelector
 
 
 class _OutputGradientAnalyser(Analyser):
@@ -136,6 +138,22 @@ class TestAnalyserList(unittest.TestCase):
         )
         self.assertEqual(gradient_analyser.current_states, {})
 
+    def test_duplicate_analyser_types_have_distinct_result_prefixes(self):
+        first = NameAnalyser()
+        second = NameAnalyser()
+        first.working_results["layer"] = "first"
+        second.working_results["layer"] = "second"
+
+        result = AnalyserList(first, second).to_dict()
+
+        self.assertEqual(
+            result,
+            {
+                "NameAnalyser[0].layer": "first",
+                "NameAnalyser[1].layer": "second",
+            },
+        )
+
 
 class TestAnalyserEnablement(unittest.TestCase):
     def test_disabled_forward_analyser_does_not_retain_activations(self):
@@ -226,6 +244,85 @@ class TestPerClassAnalyser(unittest.TestCase):
         analyser.reset()
 
         self.assertEqual(analyser.to_dict(), {})
+
+    def test_state_dict_reconstructs_dynamic_children(self):
+        analyser = PerClassAnalyser(_BufferedAnalyser())
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        analyser.targets = torch.tensor([0, 1])
+        watched(torch.ones(2, 1))
+        analyser.analysers[0].marker.fill_(2)
+        analyser.analysers[1].marker.fill_(3)
+        state = copy.deepcopy(analyser.state_dict())
+
+        restored = PerClassAnalyser(_BufferedAnalyser())
+        interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            restored,
+        )
+        restored.load_state_dict(state)
+
+        self.assertEqual(list(restored.analysers), [0, 1])
+        torch.testing.assert_close(
+            restored.analysers[0].marker,
+            torch.tensor([2.0]),
+        )
+        torch.testing.assert_close(
+            restored.analysers[1].marker,
+            torch.tensor([3.0]),
+        )
+
+    def test_supports_multi_input_wrapped_nodes(self):
+        class AddInputs(nn.Module):
+            def forward(self, left, right):
+                return torch.add(left, right)
+
+        selector = NodeSelector(
+            lambda state: (
+                state[1].op == "call_function"
+                and state[1].target is torch.add
+            )
+        )
+        analyser = PerClassAnalyser(_BatchSizeAnalyser())
+        watched = interject_by_match(AddInputs(), selector, analyser)
+        analyser.targets = torch.tensor([0, 1])
+
+        watched(torch.ones(2, 1), torch.ones(2, 1))
+
+        self.assertEqual(analyser.to_dict(), {0: {"add": 1}, 1: {"add": 1}})
+
+    def test_supports_multi_input_gradients(self):
+        class AddInputs(nn.Module):
+            def forward(self, left, right):
+                return torch.add(left, right)
+
+        selector = NodeSelector(
+            lambda state: (
+                state[1].op == "call_function"
+                and state[1].target is torch.add
+            )
+        )
+        analyser = PerClassAnalyser(_OutputGradientAnalyser())
+        watched = interject_by_match(AddInputs(), selector, analyser)
+        analyser.targets = torch.tensor([0, 1])
+        left = torch.ones(2, 1, requires_grad=True)
+        right = torch.ones(2, 1, requires_grad=True)
+        weights = torch.tensor([[1.0], [2.0]])
+
+        (watched(left, right) * weights).sum().backward()
+
+        torch.testing.assert_close(
+            analyser.to_dict()[0]["add"],
+            weights[[0]],
+        )
+        torch.testing.assert_close(
+            analyser.to_dict()[1]["add"],
+            weights[[1]],
+        )
 
     def test_versus_reuses_scalar_class_keys_across_batches(self):
         analyser = PerClassVersusAnalyser(_BatchSizeAnalyser())

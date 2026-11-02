@@ -160,6 +160,39 @@ class Analyser[T](WrappedForwardInterjection):
         """
         yield
 
+    @contextmanager
+    def _registration_callbacks_only(
+            self,
+            training: bool | None = None) -> Iterator[None]:
+        """Run analyser registration callbacks without adding hooks/modules.
+
+        Container analysers use this when replaying registration on children
+        which process observations dispatched by the container itself.
+        """
+        states = []
+        for analyser in self.modules():
+            if not isinstance(analyser, Analyser):
+                continue
+            states.append((
+                analyser,
+                getattr(analyser, "_skip_interjection_registration", False),
+                hasattr(analyser, "_registration_training"),
+                getattr(analyser, "_registration_training", None),
+            ))
+            analyser._skip_interjection_registration = True
+            if training is not None:
+                analyser._registration_training = training
+
+        try:
+            yield
+        finally:
+            for analyser, skip, had_training, previous_training in states:
+                analyser._skip_interjection_registration = skip
+                if had_training:
+                    analyser._registration_training = previous_training
+                elif hasattr(analyser, "_registration_training"):
+                    del analyser._registration_training
+
     def run(
         self,
         model: nn.Module | Mapping[str, nn.Module],
@@ -290,6 +323,8 @@ class Analyser[T](WrappedForwardInterjection):
     def register(self,
                  name: str,
                  module: torch.fx.GraphModule):
+        if getattr(self, "_skip_interjection_registration", False):
+            return
         training = getattr(self, "_registration_training", None)
         if training is None:
             self.interjection.register(name, module)
@@ -297,6 +332,8 @@ class Analyser[T](WrappedForwardInterjection):
             self.interjection._register_for_mode(name, module, training)
 
     def register_original_module(self, name: str, module: nn.Module | None):
+        if getattr(self, "_skip_interjection_registration", False):
+            return
         training = getattr(self, "_registration_training", None)
         if training is None:
             self.interjection.register_original_module(name, module)
@@ -749,15 +786,26 @@ class AnalyserList(Analyser[Any]):
     def to_dict(self) -> dict:
         result = dict()
 
+        names = []
         for analyser in self.analysers:
-            clz = type(analyser).__name__
-
+            name = type(analyser).__name__
             if (isinstance(analyser, PerClassAnalyser) and
                     hasattr(analyser, 'analyser')):
-                clz = 'PerClass' + type(analyser.analyser).__name__
+                name = 'PerClass' + type(analyser.analyser).__name__
+            names.append(name)
+
+        counts = {name: names.count(name) for name in names}
+        indices = {name: 0 for name in counts}
+
+        for analyser, name in zip(self.analysers, names):
+            if counts[name] == 1:
+                prefix = name
+            else:
+                prefix = f"{name}[{indices[name]}]"
+                indices[name] += 1
 
             for k, v in analyser.to_dict().items():
-                result[f"{clz}.{k}"] = v
+                result[f"{prefix}.{k}"] = v
 
         return result
 
@@ -777,6 +825,33 @@ class AnalyserList(Analyser[Any]):
             analyser.reset()
 
 
+def _select_batch(value, mask):
+    if isinstance(value, torch.Tensor):
+        return value[mask]
+    if isinstance(value, tuple):
+        selected = tuple(_select_batch(item, mask) for item in value)
+        if type(value) is tuple:
+            return selected
+        if hasattr(type(value), "_make"):
+            return type(value)._make(selected)
+        try:
+            return type(value)(selected)
+        except TypeError:
+            return selected
+    if isinstance(value, list):
+        return [_select_batch(item, mask) for item in value]
+    if isinstance(value, Mapping):
+        selected = {
+            key: _select_batch(item, mask)
+            for key, item in value.items()
+        }
+        try:
+            return type(value)(selected)
+        except TypeError:
+            return selected
+    return value
+
+
 class PerClassAnalyser(Analyser[Any]):
     """Wraps an Analyser so that it tracks statistics separately for each
      class."""
@@ -787,6 +862,7 @@ class PerClassAnalyser(Analyser[Any]):
         self.analyser = analyser
         self._class_analysers = nn.ModuleList()
         self.analysers = {}
+        self._registrations = []
 
     def reset(self):
         super().reset()
@@ -798,7 +874,43 @@ class PerClassAnalyser(Analyser[Any]):
         analyser = copy.deepcopy(self.analyser)
         self._class_analysers.append(analyser)
         self.analysers[key] = analyser
+        for registration in self._registrations:
+            self._apply_registration(analyser, registration)
         return analyser
+
+    @staticmethod
+    def _apply_registration(analyser, registration):
+        method, name, module, training = registration
+        with analyser._registration_callbacks_only(training):
+            getattr(analyser, method)(name, module)
+
+    def _record_registration(self, method, name, module):
+        registration = (
+            method,
+            name,
+            module,
+            getattr(self, "_registration_training", None),
+        )
+        self._registrations.append(registration)
+        for analyser in self.analysers.values():
+            self._apply_registration(analyser, registration)
+
+    def register(self, name, module):
+        super().register(name, module)
+        self._record_registration("register", name, module)
+
+    def register_original_module(self, name, module):
+        super().register_original_module(name, module)
+        self._record_registration("register_original_module", name, module)
+
+    def get_extra_state(self):
+        return {"class_keys": list(self.analysers)}
+
+    def set_extra_state(self, state):
+        self._class_analysers = nn.ModuleList()
+        self.analysers = {}
+        for key in state.get("class_keys", []):
+            self._create_class_analyser(key)
 
     @Analyser.enabled.setter
     def enabled(self, value: bool):
@@ -824,8 +936,8 @@ class PerClassAnalyser(Analyser[Any]):
             analyser.targets = self.targets[classes == c]
             analyser.log_forward(name,
                                  module,
-                                 inputs[classes == c],
-                                 outputs[classes == c])
+                                 _select_batch(inputs, classes == c),
+                                 _select_batch(outputs, classes == c))
 
     def log_backward(self, name, module, grad_input, grad_output):
         if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):
@@ -835,8 +947,12 @@ class PerClassAnalyser(Analyser[Any]):
 
         for c, analyser in self.analysers.items():
             if torch.any(classes == c):  # only call if there is data in this batch for this class
-                analyser.log_backward(name, module, grad_input[classes == c],
-                                      grad_output[classes == c])
+                analyser.log_backward(
+                    name,
+                    module,
+                    _select_batch(grad_input, classes == c),
+                    _select_batch(grad_output, classes == c),
+                )
 
     def process_batch_state(self,
                             name: str,
@@ -879,14 +995,22 @@ class PerClassVersusAnalyser(PerClassAnalyser):
 
             analyser = self.analysers[c]
             analyser.targets = self.targets[class_mask]
-            analyser.log_forward(name, module, inputs[class_mask],
-                                 outputs[class_mask])
+            analyser.log_forward(
+                name,
+                module,
+                _select_batch(inputs, class_mask),
+                _select_batch(outputs, class_mask),
+            )
 
             if torch.any(complement_mask):
                 analyser = self.analysers[complement_key]
                 analyser.targets = self.targets[complement_mask]
-                analyser.log_forward(name, module, inputs[complement_mask],
-                                     outputs[complement_mask])
+                analyser.log_forward(
+                    name,
+                    module,
+                    _select_batch(inputs, complement_mask),
+                    _select_batch(outputs, complement_mask),
+                )
 
     def log_backward(self, name, module, grad_input, grad_output):
         if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):
@@ -902,15 +1026,15 @@ class PerClassVersusAnalyser(PerClassAnalyser):
             self.analysers[c].log_backward(
                 name,
                 module,
-                grad_input[class_mask],
-                grad_output[class_mask],
+                _select_batch(grad_input, class_mask),
+                _select_batch(grad_output, class_mask),
             )
             if torch.any(complement_mask):
                 self.analysers[f"~{c}"].log_backward(
                     name,
                     module,
-                    grad_input[complement_mask],
-                    grad_output[complement_mask],
+                    _select_batch(grad_input, complement_mask),
+                    _select_batch(grad_output, complement_mask),
                 )
 
 

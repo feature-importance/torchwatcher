@@ -5,6 +5,7 @@ import torchbearer
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+from torchwatcher.analysis import PerClassAnalyser
 from torchwatcher.analysis.linear_probe import LinearProbe
 from torchwatcher.interjection import interject_by_match, interject_by_name
 from torchwatcher.interjection.node_selector import node_types
@@ -106,6 +107,22 @@ class TestLinearProbes(unittest.TestCase):
         net(features)
 
         self.assertEqual(lp.working_results["0"].shape, (2, 2))
+
+    def test_per_class_wrapper_replays_probe_registration(self):
+        analyser = PerClassAnalyser(LinearProbe(
+            2,
+            partial_optim=lambda params: torch.optim.SGD(params, lr=0.1),
+            criterion=nn.CrossEntropyLoss(),
+        ))
+        net = interject_by_name(nn.Sequential(nn.Identity()), "0", analyser)
+        analyser.targets = torch.tensor([0, 1])
+
+        net(torch.randn(2, 3))
+
+        for child in analyser.analysers.values():
+            self.assertIn("0_probe", child.probes)
+            self.assertEqual(child.working_results["0"].shape, (1, 2))
+            self.assertEqual(child.interjection._wrapped, {})
 
 
 if __name__ == '__main__':
