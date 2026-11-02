@@ -2,10 +2,15 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from torchwatcher.analysis import NameAnalyser
+from torchwatcher.drawing import draw_graph, draw_graph_pretty
 from torchwatcher.interjection import (
     WrappedForwardInterjection,
     interject_by_match,
     interject_by_module_class,
+    interject_by_name,
+    trace,
+    trace_shapes,
 )
 from torchwatcher.interjection.node_selector import NodeSelector
 
@@ -183,3 +188,55 @@ def test_wrapped_interjection_preserves_train_mode_operation():
     torch.testing.assert_close(train_result, torch.zeros_like(inputs))
     torch.testing.assert_close(eval_result, inputs)
     assert interjection.names == ["dropout", "dropout"]
+
+
+def test_drawing_resolves_mode_aware_analyser_interjection():
+    watched_model = interject_by_name(
+        nn.Sequential(nn.ReLU()),
+        "0",
+        NameAnalyser(),
+    )
+
+    for training in (True, False):
+        watched_model.train(training)
+        graph = draw_graph(watched_model)
+        pretty_graph = draw_graph_pretty(watched_model, torch.ones(1, 2))
+
+        assert "relu" in graph.to_string().lower()
+        assert "relu" in pretty_graph.to_string().lower()
+
+
+def test_drawing_resolves_mode_aware_direct_wrapped_interjection():
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.ReLU()),
+        nn.ReLU,
+        _ModuleRecorder(),
+    )
+
+    for training in (True, False):
+        watched_model.train(training)
+        assert "relu" in draw_graph(watched_model).to_string().lower()
+
+
+class _ModeRecorder(nn.Module):
+    observations = []
+
+    def forward(self, inputs):
+        self.observations.append(self.training)
+        return inputs
+
+
+def test_trace_shapes_uses_each_graphs_corresponding_mode():
+    _ModeRecorder.observations = []
+    watched_model = trace(
+        nn.Sequential(_ModeRecorder()),
+        tracer_kwargs={"leaf_modules": [_ModeRecorder]},
+    )
+    watched_model.train()
+
+    trace_shapes(watched_model, torch.ones(1, 2))
+
+    assert _ModeRecorder.observations == [True, False]
+    assert watched_model.training
+    assert watched_model.train_module.training
+    assert watched_model.eval_module.training
