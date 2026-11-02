@@ -1,5 +1,5 @@
 import copy
-from typing import Type, Optional, Dict, Any, List, Union, Callable
+from typing import Type, Optional, Dict, Any, Union, Callable
 
 import math
 
@@ -154,20 +154,6 @@ def get_fresh_qualname(traced: fx.GraphModule, prefix: str) -> str:
     return qualname
 
 
-def find_nodes(graph: fx.Graph, op) -> List[fx.Node]:
-    """Find nodes in the graph matching a given operation.
-
-    Args:
-        graph: graph to search
-        op: operation to search for
-
-    Returns:
-        matching nodes
-    """
-
-    return list(filter(lambda n: n.op == op, graph.nodes))
-
-
 def extract_node(graph_module: fx.GraphModule,
                  target_node: fx.Node) -> fx.GraphModule:
     """Extract a node into its own module/graph, re-writing inputs as appropriate.
@@ -182,30 +168,17 @@ def extract_node(graph_module: fx.GraphModule,
     Returns:
         the new GraphModule with just that single node in it
     """
-    gm = copy.deepcopy(graph_module)
+    graph = fx.Graph()
+    inputs = {
+        node: graph.placeholder(node.name)
+        for node in target_node.all_input_nodes
+    }
+    copied_node = graph.node_copy(target_node, inputs.__getitem__)
+    graph.output(copied_node)
 
-    # Set new inputs with placeholders
-    for node in gm.graph.nodes:
-        if node.name == target_node.all_input_nodes[0].name:
-            # FIXME: need to deal with multiple inputs
-            node.op, node.target, node.args, node.kwargs = ('placeholder',
-                                                            node.name, (), {})
-
-    output_node = find_nodes(gm.graph, op='output')[0]
-    output_node.args = tuple(
-        [node for node in gm.graph.nodes if node.name == target_node.name])
-    gm.graph.eliminate_dead_code()
-
-    # Remove unused placeholders
-    for node in find_nodes(gm.graph, op='placeholder'):
-        if node.name != target_node.all_input_nodes[0].name:
-            # FIXME: need to deal with multiple inputs
-            gm.graph.erase_node(node)
-    gm.graph.eliminate_dead_code()
-    gm.delete_all_unused_submodules()
-    gm.recompile()
-
-    return gm
+    # Use a copy so the extracted graph owns the module and parameters it
+    # executes, independently of the graph from which the node was removed.
+    return fx.GraphModule(copy.deepcopy(graph_module), graph)
 
 
 def add_interjection(graph_module: fx.GraphModule,
@@ -286,6 +259,7 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
 
     if hasattr(interjection, '_wrapped'):
         with graph_module.graph.inserting_after(node):
+            inputs = tuple(node.all_input_nodes)
             extracted = extract_node(graph_module, node)
             original_module = (
                 extracted.get_submodule(node.target)
@@ -293,7 +267,7 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
                 else None
             )
             # new node to represent the call to the interjection
-            args = (preferred_name(node), node,)
+            args = (preferred_name(node), *inputs)
             new_node = graph_module.graph.call_module(interjection_name, args)
             new_node.meta['nn_module_stack'] = node.meta.get(
                 'nn_module_stack',
@@ -308,8 +282,6 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
             # clean everything up by replacing uses and inputs, then removing
             # the original node
             node.replace_all_uses_with(new_node)
-            # FIXME: need to deal with multiple inputs
-            new_node.replace_input_with(new_node, node.all_input_nodes[0])
         graph_module.graph.erase_node(node)
     else:
         with graph_module.graph.inserting_after(node):

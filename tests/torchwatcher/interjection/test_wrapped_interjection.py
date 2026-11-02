@@ -1,4 +1,3 @@
-import pytest
 import torch
 from torch import nn
 
@@ -64,13 +63,9 @@ def test_wrapped_interjection_receives_none_for_function_call():
 
 class _AddInputs(nn.Module):
     def forward(self, left, right):
-        return torch.add(left, right)
+        return torch.add(input=left, other=right, alpha=2)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="wrapped interjections currently extract only the first node input",
-)
 def test_wrapped_interjection_supports_multi_input_node():
     interjection = _ModuleRecorder()
     selector = NodeSelector(
@@ -84,10 +79,70 @@ def test_wrapped_interjection_supports_multi_input_node():
         selector,
         interjection,
     )
+    left = torch.tensor([[1.0, 2.0]], requires_grad=True)
+    right = torch.tensor([[3.0, 4.0]], requires_grad=True)
+
+    result = watched_model(left, right)
+    result.sum().backward()
+
+    torch.testing.assert_close(result, left + 2 * right)
+    assert interjection.modules == [None]
+    torch.testing.assert_close(left.grad, torch.ones_like(left))
+    torch.testing.assert_close(right.grad, torch.full_like(right, 2))
+
+
+class _AddModule(nn.Module):
+    def forward(self, left, right):
+        return left + right
+
+
+class _UsesAddModule(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.add = _AddModule()
+
+    def forward(self, left, right):
+        return self.add(left, right)
+
+
+def test_wrapped_interjection_supports_multi_input_module():
+    interjection = _ModuleRecorder()
+    watched_model = interject_by_module_class(
+        _UsesAddModule(),
+        _AddModule,
+        interjection,
+    )
     left = torch.tensor([[1.0, 2.0]])
     right = torch.tensor([[3.0, 4.0]])
 
     result = watched_model(left, right)
 
     torch.testing.assert_close(result, left + right)
+    assert len(interjection.modules) == 1
+    assert isinstance(interjection.modules[0], _AddModule)
+
+
+class _AddRepeatedInput(nn.Module):
+    def forward(self, inputs):
+        return torch.add(inputs, inputs)
+
+
+def test_wrapped_interjection_supports_repeated_input():
+    interjection = _ModuleRecorder()
+    selector = NodeSelector(
+        lambda state: (
+            state[1].op == "call_function"
+            and state[1].target is torch.add
+        )
+    )
+    watched_model = interject_by_match(
+        _AddRepeatedInput(),
+        selector,
+        interjection,
+    )
+    inputs = torch.tensor([[1.0, 2.0]])
+
+    result = watched_model(inputs)
+
+    torch.testing.assert_close(result, inputs * 2)
     assert interjection.modules == [None]
