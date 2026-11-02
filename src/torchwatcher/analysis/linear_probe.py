@@ -91,7 +91,7 @@ class LinearProbe(Analyser):
 
     def __init__(self,
                  num_classes: int,
-                 partial_optim: Callable[[ParamsT], Optimizer] = None,
+                 partial_optim: Callable[[ParamsT], Optimizer],
                  criterion: Callable|None = None,
                  metrics: List[Union[str, Metric]] = None):
         """Create a linear-probe analyser.
