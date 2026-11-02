@@ -212,8 +212,13 @@ class AnalyserEvaluation(Callback):
 
     def record(self, state, *, event, global_step=None) -> dict:
         model = state[torchbearer.MODEL]
-        device = next(model.parameters()).device
+        device = _model_device(model)
         was_training = model.training
+        analyser_was_training = (
+            self.analyser.training
+            if isinstance(self.analyser, nn.Module)
+            else None
+        )
         was_enabled = self.analyser.enabled
         saved_gradients = (
             _save_gradients(model) if self.compute_gradients else None
@@ -241,6 +246,8 @@ class AnalyserEvaluation(Callback):
                 _restore_gradients(model, saved_gradients)
             self.analyser.enabled = was_enabled
             model.train(was_training)
+            if analyser_was_training is not None:
+                self.analyser.train(analyser_was_training)
 
         if global_step is None:
             global_step = state.get(GLOBAL_STEP, self._last_recorded_step)
@@ -299,6 +306,16 @@ class _FlushAnalyserEvaluationSink(Callback):
 
     def on_end(self, state):
         self.evaluation.sink.flush()
+
+
+def _model_device(model: nn.Module) -> torch.device:
+    parameter = next(model.parameters(), None)
+    if parameter is not None:
+        return parameter.device
+    buffer = next(model.buffers(), None)
+    if buffer is not None:
+        return buffer.device
+    return torch.device("cpu")
 
 
 def _default_inputs(batch, device):

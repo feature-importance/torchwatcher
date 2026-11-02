@@ -4,6 +4,8 @@ import torchbearer
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+from torchwatcher.analysis import NameAnalyser
+from torchwatcher.interjection import interject_by_name
 from torchwatcher.logging import InMemorySink
 from torchwatcher.parameters import selectors
 from torchwatcher.training import (
@@ -221,6 +223,44 @@ def test_analyser_evaluation_records_and_restores_state():
         "global_step": 2,
         "result": {"layer": {"value": 1}},
     }
+
+
+def test_analyser_evaluation_supports_parameterless_models():
+    model = nn.Identity()
+    model.train()
+    analyser = FakeAnalyser()
+    loader = DataLoader(TensorDataset(torch.randn(2, 2)), batch_size=1)
+    evaluation = AnalyserEvaluation(analyser, loader)
+
+    record = evaluation.record(
+        {torchbearer.MODEL: model},
+        event="manual",
+    )
+
+    assert model.training
+    assert not analyser.enabled
+    assert record["result"] == {"layer": {"value": 1}}
+
+
+def test_analyser_evaluation_restores_independent_analyser_mode():
+    analyser = NameAnalyser()
+    model = interject_by_name(
+        nn.Sequential(nn.Linear(2, 1)),
+        "0",
+        analyser,
+    )
+    model.train()
+    analyser.eval()
+    loader = DataLoader(TensorDataset(torch.randn(2, 2)), batch_size=1)
+    evaluation = AnalyserEvaluation(analyser, loader)
+
+    evaluation.record(
+        {torchbearer.MODEL: model},
+        event="manual",
+    )
+
+    assert model.training
+    assert not analyser.training
 
 
 def test_analyser_evaluation_can_enable_gradient_computation():
