@@ -64,6 +64,46 @@ def test_interjection_does_not_mutate_source_model():
     assert analyser.to_dict() == {"0": "0"}
 
 
+class _InplaceScale(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.tensor(2.0))
+        self.inplace = True
+
+    def forward(self, inputs):
+        if self.inplace:
+            return inputs.mul_(self.weight)
+        return inputs * self.weight
+
+
+def test_interjection_does_not_mutate_source_inplace_module():
+    source_module = _InplaceScale()
+    model = nn.Sequential(source_module)
+    interjection = _ModuleRecorder()
+
+    watched_model = interject_by_module_class(
+        model,
+        _InplaceScale,
+        interjection,
+    )
+
+    assert source_module.inplace
+    for training in (True, False):
+        wrapped_module = interjection.wrapped_module(
+            "0",
+            training=training,
+        ).get_submodule("0")
+        assert wrapped_module is not source_module
+        assert wrapped_module.weight is source_module.weight
+        assert not wrapped_module.inplace
+
+    result = watched_model(torch.ones(2))
+
+    torch.testing.assert_close(result, torch.full((2,), 2.0))
+    assert interjection.modules == [source_module]
+    assert source_module.inplace
+
+
 class _FunctionalReLU(nn.Module):
     def forward(self, inputs):
         return torch.relu(inputs)

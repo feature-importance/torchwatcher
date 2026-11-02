@@ -214,7 +214,9 @@ def handle_inplace(graph_module: fx.GraphModule, node: fx.Node) -> fx.Node:
     # handle modules with 'inplace' flags
     if (node.op == 'call_module' and
             hasattr(graph_module.get_submodule(node.target), 'inplace')):
-        graph_module.get_submodule(node.target).inplace = False
+        module = copy.copy(graph_module.get_submodule(node.target))
+        module.inplace = False
+        graph_module.set_submodule(node.target, module)
         return node
 
     # TODO: call_function with a kwarg called 'inplace'
@@ -256,17 +258,17 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
 
     interjection_name = add_interjection(graph_module, interjection)
 
+    original_module = (
+        graph_module.get_submodule(node.target)
+        if node.op == 'call_module'
+        else None
+    )
     node = handle_inplace(graph_module, node)
 
     if hasattr(interjection, '_wrapped'):
         with graph_module.graph.inserting_after(node):
             inputs = tuple(node.all_input_nodes)
             extracted = extract_node(graph_module, node)
-            original_module = (
-                extracted.get_submodule(node.target)
-                if node.op == 'call_module'
-                else None
-            )
             # new node to represent the call to the interjection
             args = (preferred_name(node), *inputs)
             new_node = graph_module.graph.call_module(
