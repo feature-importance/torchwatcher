@@ -158,6 +158,48 @@ def test_wrapped_interjection_supports_multi_input_node():
     torch.testing.assert_close(right.grad, torch.full_like(right, 2))
 
 
+def test_pretty_drawing_supports_multi_input_wrapped_node():
+    analyser = NameAnalyser()
+    selector = NodeSelector(
+        lambda state: (
+            state[1].op == "call_function"
+            and state[1].target is torch.add
+        )
+    )
+    watched_model = interject_by_match(
+        _AddInputs(),
+        selector,
+        analyser,
+    )
+
+    graph = draw_graph_pretty(
+        watched_model,
+        torch.ones(1, 2),
+        torch.ones(1, 2),
+    )
+
+    graph_source = graph.to_string().lower()
+    assert "add" in graph_source
+    assert "2 x (1, 2)" in graph_source
+
+
+def test_pretty_drawing_supports_shape_changing_wrapped_node():
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        NameAnalyser(),
+    )
+
+    graph = draw_graph_pretty(watched_model, torch.ones(1, 2))
+
+    graph_source = graph.to_string().lower()
+    assert "linear" in graph_source
+    assert "input:</td>" in graph_source
+    assert "(1, 2)" in graph_source
+    assert "output: </td>" in graph_source
+    assert "(1, 1)" in graph_source
+
+
 class _AddModule(nn.Module):
     def forward(self, left, right):
         return left + right

@@ -9,7 +9,7 @@ from torch.fx.passes.graph_drawer import FxGraphDrawer, _WEIGHT_TEMPLATE, _COLOR
 from torch.fx.passes.shape_prop import TensorMetadata
 from torchwatcher.analysis import Analyser
 from torchwatcher.analysis.analysis import PerClassAnalyser
-from torchwatcher.interjection.tracing import DualGraphModule, trace_shapes, ShapeProp
+from torchwatcher.interjection.tracing import DualGraphModule, trace_shapes
 from torchwatcher.interjection import WrappedForwardInterjection, ForwardInterjection
 
 
@@ -142,8 +142,14 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
 
                 wrapped_nodes.add(node)
 
-                if 'tensor_meta' in node.meta:
-                    ShapeProp(gm).propagate(torch.empty(node.meta['tensor_meta'].shape))
+                outer_inputs = iter(node.all_input_nodes)
+                for wrapped_node in gm.graph.nodes:
+                    if wrapped_node.op == "placeholder":
+                        wrapped_node.meta.update(next(outer_inputs).meta)
+                    elif wrapped_node.op == "output":
+                        output = wrapped_node.args[0]
+                        if isinstance(output, torch.fx.Node):
+                            output.meta.update(node.meta)
                 for n in gm.graph.nodes:
                     if n.op != 'placeholder' and n.op != 'output':
                         dot_node.add_node(pydot.Node(name + "/" + node.name+"/"+n.name,
@@ -153,8 +159,6 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
                                                      **style
                                                      )
                                           )
-                # #TODO: multiple inputs?
-
                 # self._to_dot_recursive(gm, name + "/" + node.name, dot_node,
                 #                        sub_name_to_subgraph, ignore_getattr,
                 #                        ignore_parameters_and_buffers,
