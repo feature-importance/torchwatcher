@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.15"
+__generated_with = "0.25.2"
 app = marimo.App(width="full")
 
 
@@ -15,7 +15,7 @@ def _():
     from torchvision.models import resnet18
 
     model = resnet18()
-    return model, nn, sel, select_parameters
+    return model, nn, resnet18, sel, select_parameters
 
 
 @app.cell
@@ -63,6 +63,152 @@ def _(model, sel):
 
     # ditto:
     # parameters(model, sel.all)
+    return
+
+
+@app.cell
+def _(nn, resnet18, sel):
+    import torch
+    from torchwatcher.logging import InMemorySink
+    from torchwatcher.training import EveryNSteps, ParameterTracker
+    from torchbearer import Trial
+    from torchvision.datasets import CIFAR10
+    from torchvision.transforms import ToTensor, Compose
+    import torchvision.transforms.v2 as v2
+
+    model2 = resnet18()
+
+    sink = InMemorySink()
+    tracker = ParameterTracker(
+        sel.matches_module_name("conv1") & sel.is_weight,
+        {
+            "update_norm": lambda step, info, state: step.norm(),
+            "gradient_norm": lambda step, info, state: info.parameter.grad.norm(),
+        },
+        sink,
+        schedule=EveryNSteps(100),
+        event="optimizer_step"
+    )
+
+    data = CIFAR10(root="/Users/jsh2/Data/", train=True, transform=Compose([ToTensor(), v2.RGB()]))
+    loader = torch.utils.data.DataLoader(data, shuffle=True, batch_size=32)
+
+    optim = torch.optim.Adam(sel.is_weight.parameters(model2), 0.001)
+    trial = Trial(model2, optim, nn.CrossEntropyLoss(), metrics=["acc"], callbacks=[tracker]).to("mps")
+    trial.with_train_generator(loader).run(10)
+    return (
+        CIFAR10,
+        Compose,
+        EveryNSteps,
+        InMemorySink,
+        ParameterTracker,
+        ToTensor,
+        Trial,
+        sink,
+        torch,
+        v2,
+    )
+
+
+@app.cell
+def _(sink):
+    from torchwatcher.logging import observations_to_dataframe, path_contains
+
+    frame = observations_to_dataframe(sink.observations)
+    frame
+    return frame, observations_to_dataframe, path_contains
+
+
+@app.cell
+def _(frame, path_contains):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    plt.figure()
+    sns.lineplot(path_contains(frame, ["update_norm"]), x="global_step", y="value")
+    plt.show()
+
+    plt.figure()
+    sns.lineplot(path_contains(frame, ["gradient_norm"]), x="global_step", y="value")
+    plt.show()
+    return
+
+
+@app.cell
+def _(
+    CIFAR10,
+    Compose,
+    EveryNSteps,
+    InMemorySink,
+    ParameterTracker,
+    ToTensor,
+    Trial,
+    nn,
+    observations_to_dataframe,
+    resnet18,
+    sel,
+    torch,
+    v2,
+):
+    from copy import deepcopy
+    from tqdm import tqdm
+
+    def compare(epochs=1, steps=1):
+        base = resnet18()
+        data = CIFAR10(root="/Users/jsh2/Data/", train=True, transform=Compose([ToTensor(), v2.RGB()]))
+        loader = torch.utils.data.DataLoader(data, shuffle=False, batch_size=32)
+    
+        sink = InMemorySink()
+        tracker = ParameterTracker(
+            sel.matches_module_name("conv1") & sel.is_weight,
+            {"update_norm": lambda step, info, state: step.norm()},
+            sink,
+            schedule=EveryNSteps(steps),
+            event="optimizer_step"
+        )
+
+        model = deepcopy(base)
+        optim = torch.optim.Adam(sel.is_weight.parameters(model), 0.001)
+        trial = Trial(model, optim, nn.CrossEntropyLoss(), metrics=["acc"], callbacks=[tracker]).to("mps")
+        trial.with_train_generator(loader).run(epochs)
+    
+    
+        model = deepcopy(base).to('mps')
+        optim = torch.optim.Adam(sel.is_weight.parameters(model), 0.001)
+    
+        trace = []
+        counter = 1
+        for epoch in range(epochs):
+            for (X, y) in tqdm(loader):
+                optim.zero_grad()
+                pred = model(X.to('mps'))
+                loss = nn.functional.cross_entropy(pred, y.to('mps'))
+                loss.backward()
+    
+                before = model.conv1.weight.clone()
+                optim.step()
+                after = model.conv1.weight.clone()
+    
+                if counter % steps == 0:
+                    trace.append((after.detach() - before.detach()).norm().cpu().item())
+            
+                counter +=1
+
+        return observations_to_dataframe(sink.observations)['value'], trace
+
+    return (compare,)
+
+
+@app.cell
+def _(compare):
+    tw, man = compare()
+    return man, tw
+
+
+@app.cell
+def _(man, tw):
+    for i in range(len(man)):
+        print(tw[i], man[i])
     return
 
 

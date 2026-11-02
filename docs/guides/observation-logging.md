@@ -77,3 +77,46 @@ results are flattened below the supplied path, and the analyser's qualified
 class name is included in observation metadata. When no path is supplied, the
 default is `("analysers", type(analyser).__name__)`.
 
+## Dataframes
+
+Observation collections can be converted to long-form tabular records without
+an additional dependency, or directly to a pandas dataframe when TorchWatcher
+is installed with the `dataframe` extra:
+
+```bash
+python -m pip install -e ".[dataframe]"
+```
+
+```python
+from torchwatcher.logging import (
+    observation_records,
+    observations_to_dataframe,
+)
+
+records = list(observation_records(sink.observations))
+frame = observations_to_dataframe(sink.observations)
+```
+
+Each row contains `path`, `global_step`, `epoch`, `batch`, `event`, `value` and
+`metadata`. Scalar tensors become Python scalars; non-scalar tensors are
+detached and copied to CPU. Pass `expand_values=True` to emit one row per tensor
+element with its coordinate in a `value_index` column:
+
+```python
+expanded = observations_to_dataframe(
+    sink.observations,
+    expand_values=True,
+)
+```
+
+The resulting long-form dataframe can be reshaped when observations have a
+suitable unique index:
+
+```python
+wide = frame.pivot(
+    index=["global_step", "epoch", "batch", "event"],
+    columns="path",
+    values="value",
+)
+```
+
