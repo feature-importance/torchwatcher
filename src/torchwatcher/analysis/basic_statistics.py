@@ -25,7 +25,11 @@ class FeatureStatistics(Analyser[_FeatureStatistics]):
         features = state.outputs
 
         with torch.no_grad():
-            channel_features = features.detach().view(features.shape[0], 1, -1)
+            channel_features = features.detach().reshape(
+                features.shape[0],
+                features.shape[1],
+                -1,
+            )
 
             if working_results is None:
                 working_results = _FeatureStatistics()
