@@ -9,10 +9,11 @@ from ..nn import GradientIdentity
 from .tracing import symbolic_trace, DualGraphModule, _get_name
 
 
-def replace_module(model: nn.Module, selector: NodeSelector,
-                   create_replacement: Callable[[nn.Module], nn.Module],
-                   tracer_kwargs: Optional[Dict[str, Any]] = None,
-                   class_name_prefix="Replaced_") -> GraphModule:
+def _replace_module(model: nn.Module, selector: NodeSelector,
+                    create_replacement: Callable[[nn.Module], nn.Module],
+                    replacements: Dict[str, nn.Module],
+                    tracer_kwargs: Optional[Dict[str, Any]] = None,
+                    class_name_prefix="Replaced_") -> GraphModule:
     """Replace a module with another module within the graph.
 
     Args:
@@ -38,8 +39,11 @@ def replace_module(model: nn.Module, selector: NodeSelector,
     for node in traced.graph.nodes:
         if selector.fn((traced, node)):
             assert node.op == 'call_module'
-            replacement = create_replacement(traced.get_submodule(node.target))
-            traced.add_submodule(node.target, replacement)
+            if node.target not in replacements:
+                replacements[node.target] = create_replacement(
+                    traced.get_submodule(node.target)
+                )
+            traced.add_submodule(node.target, replacements[node.target])
 
     traced.graph.eliminate_dead_code()
     traced.delete_all_unused_submodules()
@@ -48,6 +52,35 @@ def replace_module(model: nn.Module, selector: NodeSelector,
     traced.__class__.__name__ = class_name_prefix + model.__class__.__name__
 
     return traced
+
+
+def replace_module(model: nn.Module, selector: NodeSelector,
+                   create_replacement: Callable[[nn.Module], nn.Module],
+                   tracer_kwargs: Optional[Dict[str, Any]] = None,
+                   class_name_prefix="Replaced_") -> GraphModule:
+    """Replace a module with another module within a single traced graph.
+
+    Args:
+        model: the model
+        selector: node selector. This must only match 'call_module' nodes.
+        create_replacement: a function to create the replacement module. It will
+                            be called with the original module as an argument.
+        tracer_kwargs: extra keyword arguments to pass to the tracing module.
+                       The 'leaf_modules' key is particularly useful when you
+                       want to replace a custom module without tracing inside
+                       it.
+
+    Returns:
+        the new model with replacements made.
+    """
+    return _replace_module(
+        model,
+        selector,
+        create_replacement,
+        {},
+        tracer_kwargs,
+        class_name_prefix,
+    )
 
 
 def replace(model: nn.Module, selector: NodeSelector,
@@ -79,13 +112,21 @@ def replace(model: nn.Module, selector: NodeSelector,
 
     graphs = {}
     graphmodules = {}
+    replacements = {}
     for mode in ["train", "eval"]:
         if mode == "train":
             model.train()
         elif mode == "eval":
             model.eval()
 
-        traced = replace_module(model, selector, create_replacement, tracer_kwargs, class_name_prefix)
+        traced = _replace_module(
+            model,
+            selector,
+            create_replacement,
+            replacements,
+            tracer_kwargs,
+            class_name_prefix,
+        )
         graphs[mode] = traced.graph
         graphmodules[mode] = traced
 
