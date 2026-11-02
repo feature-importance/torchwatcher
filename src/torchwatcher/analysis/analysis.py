@@ -274,10 +274,20 @@ class Analyser[T](WrappedForwardInterjection):
     def register(self,
                  name: str,
                  module: torch.fx.GraphModule):
-        self.interjection.register(name, module)
+        training = getattr(self, "_registration_training", None)
+        if training is None:
+            self.interjection.register(name, module)
+        else:
+            self.interjection._register_for_mode(name, module, training)
 
     def register_original_module(self, name: str, module: nn.Module | None):
-        self.interjection.register_original_module(name, module)
+        training = getattr(self, "_registration_training", None)
+        if training is None:
+            self.interjection.register_original_module(name, module)
+        else:
+            self.interjection._register_original_module_for_mode(
+                name, module, training
+            )
 
     def process(self,
                 name: str,

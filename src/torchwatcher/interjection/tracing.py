@@ -176,9 +176,9 @@ def extract_node(graph_module: fx.GraphModule,
     copied_node = graph.node_copy(target_node, inputs.__getitem__)
     graph.output(copied_node)
 
-    # Use a copy so the extracted graph owns the module and parameters it
-    # executes, independently of the graph from which the node was removed.
-    return fx.GraphModule(copy.deepcopy(graph_module), graph)
+    # Keep the underlying module shared across the train and eval extractions;
+    # only their traced operations need to differ by mode.
+    return fx.GraphModule(graph_module, graph)
 
 
 def add_interjection(graph_module: fx.GraphModule,
@@ -241,7 +241,8 @@ def preferred_name(node: fx.Node) -> str:
 
 
 def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
-                        interjection: Interjection):
+                        interjection: Interjection,
+                        training: bool):
     """Insert an interjection into the traced module at a given node. If the
     interjection is of the wrapped type, then the node is replaced with
     interjection (which wraps the original node); otherwise the new node is
@@ -274,10 +275,13 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
                 {},
             ).copy()
             # register the extracted node that we wrap
-            interjection.register(preferred_name(node), extracted)
-            interjection.register_original_module(
+            interjection._register_for_mode(
+                preferred_name(node), extracted, training
+            )
+            interjection._register_original_module_for_mode(
                 preferred_name(node),
                 original_module,
+                training,
             )
             # clean everything up by replacing uses and inputs, then removing
             # the original node
@@ -375,7 +379,12 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
         traced = symbolic_trace(model, tracer_kwargs=tracer_kwargs)
         for node in traced.graph.nodes:
             if selector is not None and selector.fn((traced, node)):
-                insert_interjection(traced, node, interjection)
+                insert_interjection(
+                    traced,
+                    node,
+                    interjection,
+                    training=mode == "train",
+                )
 
         traced.graph.eliminate_dead_code()
         traced.delete_all_unused_submodules()
