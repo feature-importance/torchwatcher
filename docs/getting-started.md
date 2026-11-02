@@ -2,7 +2,7 @@
 
 ## Requirements
 
-TorchWatcher requires Python 3.11 or newer and PyTorch 2.2 or newer.
+TorchWatcher requires Python 3.12 or newer and PyTorch 2.2 or newer.
 
 The project is currently installed directly from GitHub:
 
