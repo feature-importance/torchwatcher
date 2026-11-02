@@ -675,8 +675,14 @@ class AnalyserList(Analyser[Any]):
     """Wraps multiple analysers into a single analyser."""
 
     def __init__(self, *args: Analyser):
-        super().__init__()
+        # The list itself handles forward dispatch. Gradient children register
+        # their own backward hooks, and we don't want to register them twice,
+        # so gradient is False here.
+        super().__init__(gradient=False)
         self.analysers = nn.ModuleList(args)
+
+        # but we then set it here if required to call the right hooks.
+        self.gradient = any(analyser.gradient for analyser in self.analysers)
 
     def log_forward(self, name, module, inputs, outputs):
         for analyser in self.analysers:
