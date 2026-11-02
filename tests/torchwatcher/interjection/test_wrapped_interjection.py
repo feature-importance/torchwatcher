@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+import pytest
 from torch import nn
 
 from torchwatcher.analysis import NameAnalyser
@@ -202,6 +203,34 @@ def test_wrapped_interjection_preserves_train_mode_operation():
     torch.testing.assert_close(train_result, torch.zeros_like(inputs))
     torch.testing.assert_close(eval_result, inputs)
     assert interjection.names == ["dropout", "dropout"]
+
+
+@pytest.mark.parametrize("model_training", [True, False])
+@pytest.mark.parametrize("analyser_training", [True, False])
+def test_analyser_mode_does_not_select_wrapped_operation(
+        model_training,
+        analyser_training):
+    analyser = NameAnalyser()
+    selector = NodeSelector(
+        lambda state: (
+            state[1].op == "call_function"
+            and state[1].target is F.dropout
+        )
+    )
+    watched_model = interject_by_match(
+        _FunctionalDropout(),
+        selector,
+        analyser,
+    )
+    inputs = torch.ones(4)
+
+    watched_model.train(model_training)
+    analyser.train(analyser_training)
+    result = watched_model(inputs)
+
+    expected = torch.zeros_like(inputs) if model_training else inputs
+    torch.testing.assert_close(result, expected)
+    assert analyser.training is analyser_training
 
 
 def test_drawing_resolves_mode_aware_analyser_interjection():

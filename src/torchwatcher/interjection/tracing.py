@@ -269,7 +269,11 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
             )
             # new node to represent the call to the interjection
             args = (preferred_name(node), *inputs)
-            new_node = graph_module.graph.call_module(interjection_name, args)
+            new_node = graph_module.graph.call_module(
+                interjection_name,
+                args,
+                {"_torchwatcher_training": training},
+            )
             new_node.meta['nn_module_stack'] = node.meta.get(
                 'nn_module_stack',
                 {},

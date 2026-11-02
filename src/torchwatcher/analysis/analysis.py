@@ -276,8 +276,16 @@ class Analyser[T](WrappedForwardInterjection):
         _validate_analysis_models(models)
         return models
 
-    def forward(self, name, *args):
-        return self.interjection(name, *args)
+    def forward(
+            self,
+            name,
+            *args,
+            _torchwatcher_training: bool | None = None):
+        return self.interjection(
+            name,
+            *args,
+            _torchwatcher_training=_torchwatcher_training,
+        )
 
     def register(self,
                  name: str,

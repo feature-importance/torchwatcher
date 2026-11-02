@@ -127,8 +127,13 @@ class WrappedForwardInterjection(Interjection):
     def process(self, name: str, module: [None | nn.Module], inputs, outputs):
         pass
 
-    def forward(self, name, *args, **kwargs):
-        key = self._registered_key(name)
+    def forward(
+            self,
+            name,
+            *args,
+            _torchwatcher_training: bool | None = None,
+            **kwargs):
+        key = self._registered_key(name, _torchwatcher_training)
         y = self._wrapped[key](*args, **kwargs)
 
         return unpack(
