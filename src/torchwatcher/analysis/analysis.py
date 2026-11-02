@@ -92,7 +92,9 @@ class FInter(WrappedForwardInterjection):
         self._analyser = (analyser,)
 
     def process(self, name, module, inputs, outputs):
-        self._analyser[0].log_forward(name, module, inputs, outputs)
+        analyser = self._analyser[0]
+        if analyser.enabled:
+            analyser.log_forward(name, module, inputs, outputs)
 
 
 class FBInter(WrappedForwardBackwardInterjection):
@@ -103,10 +105,14 @@ class FBInter(WrappedForwardBackwardInterjection):
         self._analyser = (analyser,)
 
     def process(self, name, module, inputs, outputs):
-        self._analyser[0].log_forward(name, module, inputs, outputs)
+        analyser = self._analyser[0]
+        if analyser.enabled:
+            analyser.log_forward(name, module, inputs, outputs)
 
     def process_backward(self, name, module, grad_input, grad_output):
-        self._analyser[0].log_backward(name, module, grad_input, grad_output)
+        analyser = self._analyser[0]
+        if analyser.enabled:
+            analyser.log_backward(name, module, grad_input, grad_output)
 
 
 class Analyser[T](WrappedForwardInterjection):
@@ -136,6 +142,8 @@ class Analyser[T](WrappedForwardInterjection):
     @enabled.setter
     def enabled(self, value: bool):
         self._enabled = value
+        if not value:
+            self.current_states.clear()
 
     def reset(self):
         self.current_states = {}
@@ -297,6 +305,10 @@ class Analyser[T](WrappedForwardInterjection):
         self.interjection.process(name, module, inputs, outputs)
 
     def log_forward(self, name, module, inputs, outputs):
+        if not self.enabled:
+            self.current_states.pop(name, None)
+            return
+
         s = self.current_states[name] = AnalyserState()
         s._name = name
         s._module = module
@@ -310,7 +322,13 @@ class Analyser[T](WrappedForwardInterjection):
             self.finalize_state(s)
 
     def log_backward(self, name, _, grad_input, grad_output):
-        s = self.current_states[name]
+        if not self.enabled:
+            self.current_states.pop(name, None)
+            return
+
+        s = self.current_states.get(name)
+        if s is None:
+            return
 
         s._input_gradients = grad_input
         s._input_gradients_set = True
@@ -331,12 +349,12 @@ class Analyser[T](WrappedForwardInterjection):
         self._targets_set = True
 
     def finalize_state(self, state: AnalyserState):
+        name = state.name
+        self.current_states.pop(name, None)
+
         # only if enabled do the updates
         if not self.enabled:
             return
-
-        name = state.name
-        del self.current_states[name]
 
         if name in self.working_results:
             working = self.working_results[name]
@@ -715,7 +733,7 @@ class AnalyserList(Analyser[Any]):
 
     @Analyser.enabled.setter
     def enabled(self, value: bool):
-        self._enabled = value
+        Analyser.enabled.fset(self, value)
         # also update children so their own logic respects the flag
         for analyser in self.analysers:
             analyser.enabled = value
@@ -765,6 +783,13 @@ class PerClassAnalyser(Analyser[Any]):
         super().reset()
         self.analyser.reset()
         self.analysers = {}
+
+    @Analyser.enabled.setter
+    def enabled(self, value: bool):
+        Analyser.enabled.fset(self, value)
+        self.analyser.enabled = value
+        for analyser in self.analysers.values():
+            analyser.enabled = value
 
     def log_forward(self, name, module, inputs, outputs):
         if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):

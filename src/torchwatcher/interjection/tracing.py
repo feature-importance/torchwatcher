@@ -368,7 +368,6 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
         tracer_kwargs['leaf_modules'] = []
     tracer_kwargs['leaf_modules'].append(GradientIdentity)
 
-    graphs = {}
     graphmodules = {}
     for mode in ["train", "eval"]:
         if mode == "train":
@@ -389,18 +388,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
         traced.graph.eliminate_dead_code()
         traced.delete_all_unused_submodules()
         traced.recompile()
-        graphs[mode] = traced.graph
         graphmodules[mode] = traced
-
-    for mode in ["train", "eval"]:
-        # inserting the interjections will have added modules to the traced
-        # GraphModule, but not the underlying model. We copy those added modules
-        # over.
-        # We do this in a separate loop in case changes to val influence train
-        model_modules = dict(model.named_modules())
-        for name, module in traced.named_children():
-            if name not in model_modules:
-                model.add_module(name, module)
 
     # Build the final graph module
     graph_module = DualGraphModule(graphmodules["train"], graphmodules["eval"],

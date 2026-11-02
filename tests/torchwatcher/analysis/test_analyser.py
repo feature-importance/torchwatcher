@@ -131,6 +131,56 @@ class TestAnalyserList(unittest.TestCase):
         self.assertEqual(gradient_analyser.current_states, {})
 
 
+class TestAnalyserEnablement(unittest.TestCase):
+    def test_disabled_forward_analyser_does_not_retain_activations(self):
+        analyser = NameAnalyser()
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        analyser.enabled = False
+
+        watched(torch.ones(2, 3, requires_grad=True))
+
+        self.assertEqual(analyser.current_states, {})
+        self.assertEqual(analyser.to_dict(), {})
+
+    def test_disabled_gradient_analyser_does_not_retain_autograd_state(self):
+        analyser = _OutputGradientAnalyser()
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        analyser.enabled = False
+        inputs = torch.ones(2, 3, requires_grad=True)
+
+        watched(inputs).sum().backward()
+
+        self.assertEqual(analyser.current_states, {})
+        self.assertEqual(analyser.to_dict(), {})
+
+    def test_enablement_change_between_forward_and_backward_is_safe(self):
+        analyser = _OutputGradientAnalyser()
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        inputs = torch.ones(2, 3, requires_grad=True)
+
+        outputs = watched(inputs)
+        self.assertIn("0", analyser.current_states)
+        analyser.enabled = False
+        self.assertEqual(analyser.current_states, {})
+        analyser.enabled = True
+        outputs.sum().backward()
+
+        self.assertEqual(analyser.current_states, {})
+        self.assertEqual(analyser.to_dict(), {})
+
+
 class TestPerClassAnalyser(unittest.TestCase):
     def test_reset_discards_child_results(self):
         analyser = PerClassAnalyser(_BatchSizeAnalyser())

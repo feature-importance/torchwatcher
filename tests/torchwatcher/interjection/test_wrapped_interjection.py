@@ -49,6 +49,20 @@ def test_wrapped_interjection_receives_underlying_module_for_module_call():
     )
 
 
+def test_interjection_does_not_mutate_source_model():
+    model = nn.Sequential(nn.Linear(2, 1))
+    modules_before = dict(model.named_modules())
+    state_keys_before = list(model.state_dict())
+    analyser = NameAnalyser()
+
+    watched_model = interject_by_name(model, "0", analyser)
+
+    assert dict(model.named_modules()) == modules_before
+    assert list(model.state_dict()) == state_keys_before
+    watched_model(torch.ones(1, 2))
+    assert analyser.to_dict() == {"0": "0"}
+
+
 class _FunctionalReLU(nn.Module):
     def forward(self, inputs):
         return torch.relu(inputs)
