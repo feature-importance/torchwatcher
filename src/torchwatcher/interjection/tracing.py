@@ -458,10 +458,12 @@ def trace(model: nn.Module, tracer_kwargs: Optional[Dict[str, Any]] = None) -> D
 def trace_shapes(model: DualGraphModule, *args):
     """Trace the shapes of the inputs and outputs of a traced or interjected model."""
     # TODO: deal with multiple inputs and non-tensor types
+    import torch._functorch.config as functorch_config
     from torch._subclasses.fake_tensor import FakeTensorMode
-    torch._functorch.config.fake_tensor_prefer_device_type = 'meta'
 
+    previous_device_type = functorch_config.fake_tensor_prefer_device_type
     was_training = model.training
+    functorch_config.fake_tensor_prefer_device_type = 'meta'
     try:
         with FakeTensorMode(allow_non_fake_inputs=True):
             model.train_module.train()
@@ -469,7 +471,10 @@ def trace_shapes(model: DualGraphModule, *args):
             model.eval_module.eval()
             ShapeProp(model.eval_module).propagate(*args)
     finally:
-        model.train(was_training)
+        try:
+            model.train(was_training)
+        finally:
+            functorch_config.fake_tensor_prefer_device_type = previous_device_type
 
 
 def trim(network: fx.GraphModule):

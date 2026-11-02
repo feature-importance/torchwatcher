@@ -355,3 +355,19 @@ def test_trace_shapes_uses_each_graphs_corresponding_mode():
     assert watched_model.training
     assert watched_model.train_module.training
     assert watched_model.eval_module.training
+
+
+def test_trace_shapes_restores_functorch_config_after_failure():
+    import torch._functorch.config as functorch_config
+
+    previous_device_type = functorch_config.fake_tensor_prefer_device_type
+    functorch_config.fake_tensor_prefer_device_type = "cpu"
+    watched_model = trace(nn.Sequential(nn.Linear(2, 1)))
+
+    try:
+        with pytest.raises(RuntimeError):
+            trace_shapes(watched_model, torch.ones(1, 3))
+
+        assert functorch_config.fake_tensor_prefer_device_type == "cpu"
+    finally:
+        functorch_config.fake_tensor_prefer_device_type = previous_device_type
