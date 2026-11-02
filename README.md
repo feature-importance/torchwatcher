@@ -14,7 +14,7 @@ It also has facilities for tracking and logging model parameters and activations
 
 ## Installation
 
-TorchWatcher requires Python 3.11 or newer and PyTorch 2.2 or newer. Install the
+TorchWatcher requires Python 3.12 or newer and PyTorch 2.2 or newer. Install the
 current version directly from GitHub:
 
 ```bash
