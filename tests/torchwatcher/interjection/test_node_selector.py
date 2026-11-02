@@ -2,9 +2,12 @@ from torch import nn
 
 from torchwatcher.interjection.node_selector import (
     first,
+    has_following,
+    has_preceding,
     is_module,
     last,
     match_slice,
+    matches_name,
     nth,
 )
 from torchwatcher.interjection.tracing import symbolic_trace
@@ -52,3 +55,63 @@ def test_match_slice_selects_matching_node_range():
         "_1",
         "_3",
     ]
+
+
+def test_has_following_uses_inclusive_start_and_exclusive_stop():
+    selector = (
+        matches_name("_0")
+        & has_following(matches_name("_2"), start=2, stop=3)
+    )
+
+    assert _selected_names(_model(), selector) == ["_0"]
+    assert _selected_names(
+        _model(),
+        matches_name("_0")
+        & has_following(matches_name("_2"), start=1, stop=2),
+    ) == []
+
+
+def test_has_preceding_uses_inclusive_start_and_exclusive_stop():
+    selector = (
+        matches_name("_2")
+        & has_preceding(matches_name("_0"), start=2, stop=3)
+    )
+
+    assert _selected_names(_model(), selector) == ["_2"]
+    assert _selected_names(
+        _model(),
+        matches_name("_2")
+        & has_preceding(matches_name("_0"), start=1, stop=2),
+    ) == []
+
+
+class _BranchedModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.left_1 = nn.Linear(2, 2)
+        self.left_2 = nn.Linear(2, 2)
+        self.right_1 = nn.Linear(2, 2)
+        self.right_2 = nn.Linear(2, 2)
+
+    def forward(self, inputs):
+        left = self.left_2(self.left_1(inputs))
+        right = self.right_2(self.right_1(inputs))
+        return left + right
+
+
+def test_has_following_ignores_later_nodes_on_unrelated_branch():
+    selector = (
+        matches_name("left_1")
+        & has_following(matches_name("right_2"))
+    )
+
+    assert _selected_names(_BranchedModel(), selector) == []
+
+
+def test_has_preceding_ignores_earlier_nodes_on_unrelated_branch():
+    selector = (
+        matches_name("right_2")
+        & has_preceding(matches_name("left_1"))
+    )
+
+    assert _selected_names(_BranchedModel(), selector) == []

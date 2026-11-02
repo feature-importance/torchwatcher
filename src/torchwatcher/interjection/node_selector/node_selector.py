@@ -5,7 +5,7 @@ torch.fx graph
 from __future__ import annotations
 
 from os import linesep
-from typing import Any, Callable, Dict, List, Optional, Self, Tuple, Type
+from typing import Any, Callable, Dict, Iterable, List, Optional, Self, Tuple, Type
 
 from torch.fx import GraphModule, Node
 from torch.nn import Module
@@ -263,8 +263,36 @@ def _is_node_of_struct(
     )
 
 
-HAS_FOLLOWING_START = 1
-HAS_FOLLOWING_STOP = None
+def _has_related_node(
+        nodestate: NodeState,
+        node_selector: NodeSelector,
+        start: int,
+        stop: Optional[int],
+        neighbours: Callable[[Node], Iterable[Node]],
+) -> bool:
+    """Check nodes within a shortest graph-edge distance range."""
+    graph_module, current_node = nodestate
+    frontier = [current_node]
+    visited = set()
+    distance = 0
+
+    while frontier and (stop is None or distance < stop):
+        next_frontier = []
+        for node in frontier:
+            if node in visited:
+                continue
+            visited.add(node)
+
+            if (distance >= start and
+                    node_selector.fn((graph_module, node))):
+                return True
+
+            next_frontier.extend(neighbours(node))
+
+        frontier = next_frontier
+        distance += 1
+
+    return False
 
 
 def has_following(
@@ -284,6 +312,7 @@ def has_following(
     one operation in between are selected. This does not select the activation.
     Specifically, ``start`` and ``stop`` look at all nodes in the range
     [``start``, ``stop``), where the current node is ``start = 0``.
+    Distances are shortest-path distances measured in graph edges.
 
     Note: "Following" in this context means that the graph has a forward path to
           one or more following nodes. If a node is computed after the current
@@ -308,25 +337,15 @@ def has_following(
     """
     if start is None:
         start = 1
-    if stop is None:
-        stop = 1e9
 
     def _select(nodestate: NodeState) -> bool:
-        node: Node = nodestate[1]
-
-        i = 0
-        while i <= start:
-            node = node.next
-            i += 1
-        while i <= stop:
-            node = node.next
-            if node is None:
-                return False
-            if node_selector.fn((nodestate[0], node)):
-                return True
-            i += 1
-
-        return False
+        return _has_related_node(
+            nodestate,
+            node_selector,
+            start,
+            stop,
+            lambda node: node.users,
+        )
 
     return NodeSelector(_select)
 
@@ -347,6 +366,7 @@ def has_preceding(
     one operation in between are selected. This does not select the convolution.
     Specifically, ``start`` and ``stop`` look at all nodes backwards in the range
     [``start``, ``stop``), where the current node is ``start = 0``.
+    Distances are shortest-path distances measured in graph edges.
 
     Note: "Preceding" in this context means that the graph has a forward path
           from one or more preceding nodes. If a node is computed before the
@@ -371,25 +391,15 @@ def has_preceding(
     """
     if start is None:
         start = 1
-    if stop is None:
-        stop = 1e9
 
     def _select(nodestate: NodeState) -> bool:
-        node: Node = nodestate[1]
-
-        i = 0
-        while i <= start:
-            node = node.prev
-            i += 1
-        while i <= stop:
-            node = node.prev
-            if node is None:
-                return False
-            if node_selector.fn((nodestate[0], node)):
-                return True
-            i += 1
-
-        return False
+        return _has_related_node(
+            nodestate,
+            node_selector,
+            start,
+            stop,
+            lambda node: node.all_input_nodes,
+        )
 
     return NodeSelector(_select)
 
