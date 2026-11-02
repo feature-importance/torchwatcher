@@ -231,6 +231,36 @@ def test_wrapped_interjection_supports_multi_input_module():
     assert isinstance(interjection.modules[0], _AddModule)
 
 
+class _SingletonTuple(nn.Module):
+    def forward(self, inputs):
+        return (inputs,)
+
+
+class _UsesSingletonTuple(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tuple = _SingletonTuple()
+
+    def forward(self, inputs):
+        return self.tuple(inputs)[0] + 1
+
+
+def test_wrapped_interjection_preserves_singleton_tuple_output():
+    interjection = _ModuleRecorder()
+    watched_model = interject_by_module_class(
+        _UsesSingletonTuple(),
+        _SingletonTuple,
+        interjection,
+    )
+    inputs = torch.arange(4.0).reshape(2, 2)
+
+    result = watched_model(inputs)
+
+    torch.testing.assert_close(result, inputs + 1)
+    assert len(interjection.modules) == 1
+    assert isinstance(interjection.modules[0], _SingletonTuple)
+
+
 class _AddRepeatedInput(nn.Module):
     def forward(self, inputs):
         return torch.add(inputs, inputs)

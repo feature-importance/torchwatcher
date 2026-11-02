@@ -148,10 +148,13 @@ class WrappedForwardInterjection(Interjection):
         key = self._registered_key(name, _torchwatcher_training)
         y = self._wrapped[key](*args, **kwargs)
 
-        return unpack(
-            x_if_xp_is_none(y,
-                            self.process(name, self._original_modules[key],
-                                         unpack(args), unpack(y))))
+        processed = self.process(
+            name,
+            self._original_modules[key],
+            unpack(args),
+            unpack(y),
+        )
+        return y if processed is None else processed
 
 
 class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
