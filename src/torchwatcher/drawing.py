@@ -201,18 +201,22 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
                         leaf_module.named_parameters(), leaf_module.named_buffers()
                 ):
                     pname1 = node.name + "." + pname
+                    parameter_node_id = name + "/" + pname1
+                    operation_node_id = name + "/" + node.name
                     label1 = (
                         pname1 + "|op_code=get_" + "parameter"
                         if isinstance(ptensor, torch.nn.Parameter)
                         else "buffer" + r"\l"
                     )
                     dot_w_node = pydot.Node(
-                        name + "/" + pname1,
+                        parameter_node_id,
                         label="{" + label1 + self._get_tensor_label(ptensor) + "}",
                         **_WEIGHT_TEMPLATE,
                     )
                     current_graph.add_node(dot_w_node)
-                    current_graph.add_edge(pydot.Edge(pname1, node.name))
+                    current_graph.add_edge(
+                        pydot.Edge(parameter_node_id, operation_node_id)
+                    )
 
             if node.op == "call_module":
                 leaf_module = self._get_leaf_node(graph_module, node)
