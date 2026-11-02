@@ -162,7 +162,7 @@ class LinearProbe(Analyser):
         """
 
         probe_name = f"{name.replace(".", "_")}_probe"
-        x = state.outputs.view(state.outputs.shape[0], -1)
+        x = state.outputs.reshape(state.outputs.shape[0], -1)
 
         probe = self.probes[probe_name]
         if self.training:

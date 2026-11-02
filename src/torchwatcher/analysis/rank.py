@@ -103,7 +103,7 @@ class RankAnalyser(Analyser):
 
         features = state.outputs.detach()
 
-        f = features.view(features.shape[0], -1)
+        f = features.reshape(features.shape[0], -1)
         if not name in self.indices:
             self.features_dim[name] = f.shape[1]
             self.indices[name] = torch.randperm(f.shape[1])[:self.n]

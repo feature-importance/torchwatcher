@@ -6,7 +6,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from torchwatcher.analysis.linear_probe import LinearProbe
-from torchwatcher.interjection import interject_by_match
+from torchwatcher.interjection import interject_by_match, interject_by_name
 from torchwatcher.interjection.node_selector import node_types
 
 
@@ -89,6 +89,23 @@ class TestLinearProbes(unittest.TestCase):
         results = lp.to_dict()
         self.assertIn("1", results)
         self.assertIn("acc", results["1"])
+
+    def test_accepts_non_contiguous_activations(self):
+        lp = LinearProbe(
+            2,
+            partial_optim=lambda params: torch.optim.SGD(params, lr=0.1),
+            criterion=nn.CrossEntropyLoss(),
+        )
+        net = interject_by_name(nn.Sequential(nn.Identity()), "0", lp)
+        features = torch.randn(2, 2, 2, 2).to(
+            memory_format=torch.channels_last
+        )
+        self.assertFalse(features.is_contiguous())
+        lp.targets = torch.tensor([0, 1])
+
+        net(features)
+
+        self.assertEqual(lp.working_results["0"].shape, (2, 2))
 
 
 if __name__ == '__main__':

@@ -199,21 +199,21 @@ class Stat(ABC):
         if not torch.is_tensor(x):
             x = torch.tensor(x)
         if len(x.shape) < 1:
-            x = x.view(-1)
+            x = x.reshape(-1)
         data_shape = getattr(self, attr, None)
         if data_shape is None:
             data_shape = x.shape[1:]
             setattr(self, attr, data_shape)
         else:
             assert x.shape[1:] == data_shape
-        return x.view(x.shape[0], int(numpy.prod(data_shape)))
+        return x.reshape(x.shape[0], int(numpy.prod(data_shape)))
 
     def _restore_result_shape(self, x, attr="data_shape"):
         """Restores output data to input data shape."""
         data_shape = getattr(self, attr, None)
         if data_shape is None:
             return x
-        return x.view(data_shape * len(x.shape))
+        return x.reshape(data_shape * len(x.shape))
 
 
 class Mean(Stat):
@@ -318,14 +318,16 @@ class Variance(Stat):
             return
         # Update a batch using Chan-style update for numerical stability.
         oldcount = self.count
-        self.count += batch_count
-        new_frac = float(batch_count) / self.count
+        new_count = oldcount + batch_count
         # Update the mean according to the batch deviation from the old mean.
-        delta = batch_mean.sub_(self._mean).mul_(new_frac)
-        self._mean.add_(delta)
+        delta = batch_mean - self._mean
+        self._mean.add_(delta * (batch_count / new_count))
         # Update the variance using the batch deviation
         self.v_cmom2.add_(centered.pow(2).sum(0))
-        self.v_cmom2.add_(delta.pow_(2).mul_(new_frac * oldcount))
+        self.v_cmom2.add_(
+            delta.pow(2) * (oldcount * batch_count / new_count)
+        )
+        self.count = new_count
 
     def size(self):
         return self.count

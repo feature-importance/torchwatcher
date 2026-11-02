@@ -5,8 +5,9 @@ from torchwatcher.analysis import (
     AnalyserList,
     LayerWeightRankAnalyser,
     PerChannelWeightRankAnalyser,
+    RankAnalyser,
 )
-from torchwatcher.interjection import interject_by_module_class
+from torchwatcher.interjection import interject_by_module_class, interject_by_name
 
 
 def test_layer_weight_rank_analyser_reports_rank_for_interjected_module():
@@ -59,3 +60,21 @@ def test_analyser_list_propagates_original_module_to_weight_rank_analyser():
     watched_model(torch.ones(1, 2))
 
     assert analyser.to_dict()["0"]["layer_weight_rank"] == 2
+
+
+def test_rank_analyser_accepts_non_contiguous_activations():
+    features = torch.arange(24.0).reshape(3, 2, 2, 2).to(
+        memory_format=torch.channels_last
+    )
+    assert not features.is_contiguous()
+    analyser = RankAnalyser(n=-1)
+    watched_model = interject_by_name(
+        nn.Sequential(nn.Identity()),
+        "0",
+        analyser,
+    )
+
+    watched_model(features)
+
+    result = analyser.to_dict()["0"]
+    assert result["features_dim"] == 8

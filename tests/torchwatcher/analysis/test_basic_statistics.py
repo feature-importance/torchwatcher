@@ -15,7 +15,8 @@ def test_feature_statistics_preserves_channels_in_channel_summaries():
             [[2.0, 2.0], [2.0, 2.0]],
             [[0.0, 0.0], [0.0, 4.0]],
         ],
-    ])
+    ]).to(memory_format=torch.channels_last)
+    assert not features.is_contiguous()
     analyser = FeatureStatistics()
     watched_model = interject_by_name(
         nn.Sequential(nn.Identity()),
