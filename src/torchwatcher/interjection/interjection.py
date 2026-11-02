@@ -20,6 +20,16 @@ class Interjection(nn.Module, metaclass=abc.ABCMeta):
         """
         pass
 
+    def register_original_module(self, name: str, module: nn.Module | None):
+        """Register the module represented by a wrapped graph node, if any.
+
+        Wrapped interjections execute an extracted ``GraphModule``. When the
+        selected node was a module call, this hook separately provides the
+        underlying module copied into that graph. Non-module nodes provide
+        ``None``. Subclasses which do not need this distinction can ignore it.
+        """
+        pass
+
 
 class ForwardInterjection(Interjection):
     """Forward interjection that can be inserted _after_ particular nodes."""
@@ -61,10 +71,17 @@ class WrappedForwardInterjection(Interjection):
     def __init__(self):
         super().__init__()
         self._wrapped: dict[str, torch.fx.GraphModule] = {}
+        self._original_modules: dict[str, nn.Module | None] = {}
 
     def register(self, name: str, module: torch.fx.GraphModule | nn.Module):
         self._wrapped[name] = module
+        # Native interjections wrap the original module directly. FX-based
+        # interjections replace this value through register_original_module.
+        self._original_modules[name] = module
         self.add_module(name.replace(".", "_"), module)
+
+    def register_original_module(self, name: str, module: nn.Module | None):
+        self._original_modules[name] = module
 
     @abc.abstractmethod
     def process(self, name: str, module: [None | nn.Module], inputs, outputs):
@@ -75,7 +92,7 @@ class WrappedForwardInterjection(Interjection):
 
         return unpack(
             x_if_xp_is_none(y,
-                            self.process(name, self._wrapped[name],
+                            self.process(name, self._original_modules[name],
                                          unpack(args), unpack(y))))
 
 
@@ -107,7 +124,8 @@ class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
                  grad_input: [tuple[torch.Tensor, ...] | torch.Tensor],
                  grad_output: [tuple[torch.Tensor, ...] | torch.Tensor]) -> \
                 [tuple[torch.Tensor] | torch.Tensor | None]:
-            return self.process_backward(name, module, unpack(grad_input),
+            return self.process_backward(name, self._original_modules[name],
+                                         unpack(grad_input),
                                          unpack(grad_output))
 
         self._handles[name] = module.register_full_backward_hook(hook)

@@ -27,6 +27,37 @@ results = rank_analyser.to_dict()
 node is analyser-specific. For example, `RankAnalyser` reports values such as
 `features_rank`, `features_dim`, and `normalized_features_rank`.
 
+## Weight rank
+
+`LayerWeightRankAnalyser` treats each layer's weight as a matrix whose rows are
+flattened output filters and reports one rank for the layer. For convolutional
+weights, `PerChannelWeightRankAnalyser` instead reports one rank per output
+channel by treating each filter as an
+`(input_channels, kernel_elements)` matrix:
+
+```python
+import torch.nn as nn
+
+from torchwatcher.analysis import PerChannelWeightRankAnalyser
+from torchwatcher.interjection import interject_by_module_class
+
+weight_rank = PerChannelWeightRankAnalyser()
+watched_model = interject_by_module_class(
+    model,
+    nn.Conv2d,
+    weight_rank,
+)
+
+watched_model(inputs)
+results = weight_rank.to_dict()
+```
+
+Both analysers compute each result once after a reset because weights do not
+vary across input batches. Reset the analyser before another forward pass to
+measure changed weights. The first weight dimension is interpreted as output
+channels, matching `Linear` and ordinary convolution modules; transposed
+convolutions use a different weight layout and require an explicit adapter.
+
 Analysers can be disabled when they are attached to a model but should not run
 on every forward pass:
 

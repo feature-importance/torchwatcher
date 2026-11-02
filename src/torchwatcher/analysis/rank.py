@@ -1,5 +1,3 @@
-from typing import Any
-
 import torch
 from torch.linalg import LinAlgError, matrix_rank
 
@@ -133,21 +131,86 @@ class RankAnalyser(Analyser):
             return {}
 
 
-class LayerWeightRankAnalyser(RankAnalyser):
-    def __init__(self, mode='aTa', n=8000, threshold=1e-3):
-        super().__init__(mode, n, threshold)
-        self.w_rank = None
+class LayerWeightRankAnalyser(Analyser[int]):
+    """Compute the rank of a layer's flattened output-filter matrix.
+
+    The first weight dimension is treated as the output-channel dimension and
+    every remaining dimension is flattened into one feature dimension. The
+    result is computed once per watched layer after each analyser reset.
+    """
+
+    def __init__(self, threshold=1e-3):
+        super().__init__()
+        self.threshold = threshold
 
     def process_batch_state(self, name: str, state: AnalyserState,
-                            working_results: Any | None):
-        if (state.module is not None and hasattr(state.module, 'weight') and
-                working_results is None):
-            w = state.module.weight
-            w = w.view(w.shape[0], -1)
-            working_results = matrix_rank(w, hermitian=False,
-                                          rtol=self.threshold).cpu().item()
+                            working_results: int | None) -> int | None:
+        if working_results is None and state.module is not None:
+            weight = getattr(state.module, 'weight', None)
+            if weight is not None:
+                matrix = weight.detach().reshape(weight.shape[0], -1)
+                working_results = matrix_rank(
+                    matrix,
+                    hermitian=False,
+                    rtol=self.threshold,
+                ).cpu().item()
 
         return working_results
+
+    def finalise_result(self, name: str, result: int | None) -> dict:
+        return {'layer_weight_rank': result}
+
+
+class PerChannelWeightRankAnalyser(Analyser[torch.Tensor]):
+    """Compute one weight-matrix rank per output channel.
+
+    Weights must have at least two dimensions. Dimension zero is interpreted as
+    output channels and dimension one as input channels; any remaining kernel
+    dimensions are flattened. For a convolutional weight tensor this computes
+    the rank of each ``(input_channels, kernel_elements)`` filter matrix. For a
+    linear layer each output-channel matrix has one column, so its rank is zero
+    or one.
+    """
+
+    def __init__(self, threshold=1e-3):
+        super().__init__()
+        self.threshold = threshold
+
+    def process_batch_state(
+            self,
+            name: str,
+            state: AnalyserState,
+            working_results: torch.Tensor | None,
+    ) -> torch.Tensor | None:
+        if working_results is not None or state.module is None:
+            return working_results
+
+        weight = getattr(state.module, 'weight', None)
+        if weight is None:
+            return None
+        if weight.ndim < 2:
+            raise ValueError(
+                "per-channel weight rank requires a weight tensor with at "
+                "least two dimensions"
+            )
+
+        matrices = weight.detach().reshape(
+            weight.shape[0],
+            weight.shape[1],
+            -1,
+        )
+        return matrix_rank(
+            matrices,
+            hermitian=False,
+            rtol=self.threshold,
+        ).cpu()
+
+    def finalise_result(
+            self,
+            name: str,
+            result: torch.Tensor | None,
+    ) -> dict:
+        return {'per_channel_weight_rank': result}
 
 
 class CovarianceSpectrumStatisticsAnalyser(RankAnalyser):

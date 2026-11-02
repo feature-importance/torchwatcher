@@ -276,6 +276,9 @@ class Analyser[T](WrappedForwardInterjection):
                  module: torch.fx.GraphModule):
         self.interjection.register(name, module)
 
+    def register_original_module(self, name: str, module: nn.Module | None):
+        self.interjection.register_original_module(name, module)
+
     def process(self,
                 name: str,
                 module: None | nn.Module,
@@ -720,6 +723,11 @@ class AnalyserList(Analyser[Any]):
         super().register(name, module)
         for analyser in self.analysers:
             analyser.register(name, module)
+
+    def register_original_module(self, name, module):
+        super().register_original_module(name, module)
+        for analyser in self.analysers:
+            analyser.register_original_module(name, module)
 
     def reset(self):
         super().reset()

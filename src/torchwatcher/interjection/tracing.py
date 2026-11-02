@@ -12,7 +12,7 @@ from torch.fx.proxy import Scope, ScopeContextManager
 from torchvision.models.feature_extraction import NodePathTracer
 
 from torchwatcher.interjection.node_selector import node_selector
-from .interjection import Interjection, ForwardInterjection
+from .interjection import Interjection, ForwardInterjection, WrappedForwardInterjection
 from .node_selector import NodeSelector, matches_module_class
 from ..nn import GradientIdentity
 
@@ -287,12 +287,24 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
     if hasattr(interjection, '_wrapped'):
         with graph_module.graph.inserting_after(node):
             extracted = extract_node(graph_module, node)
+            original_module = (
+                extracted.get_submodule(node.target)
+                if node.op == 'call_module'
+                else None
+            )
             # new node to represent the call to the interjection
             args = (preferred_name(node), node,)
             new_node = graph_module.graph.call_module(interjection_name, args)
-            new_node.meta['nn_module_stack'] = node.meta['nn_module_stack'].copy()
+            new_node.meta['nn_module_stack'] = node.meta.get(
+                'nn_module_stack',
+                {},
+            ).copy()
             # register the extracted node that we wrap
             interjection.register(preferred_name(node), extracted)
+            interjection.register_original_module(
+                preferred_name(node),
+                original_module,
+            )
             # clean everything up by replacing uses and inputs, then removing
             # the original node
             node.replace_all_uses_with(new_node)
@@ -311,7 +323,10 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
             # create the interjection node after the current one
             new_node = graph_module.graph.call_module(interjection_name,
                                                       (preferred_name(node), node,))
-            new_node.meta['nn_module_stack'] = node.meta['nn_module_stack'].copy()
+            new_node.meta['nn_module_stack'] = node.meta.get(
+                'nn_module_stack',
+                {},
+            ).copy()
             # and hook it to the graph
             node.replace_all_uses_with(new_node)
             new_node.replace_input_with(new_node, node)
@@ -497,11 +512,12 @@ def interject_by_module_class_native(model: nn.Module,
     if isinstance(interjection, ForwardInterjection):
         class _Wrapped(WrappedForwardInterjection):
             def __init__(self, inter: Interjection):
-                super().__init__(wrapped_module)
+                super().__init__()
                 self.inter = inter
 
             def process(self, name: str, module: [None | nn.Module], inputs, outputs):
-                self.inter.process(name, module, inputs, outputs)
+                # forward interjections observe the output because they are placed _after_
+                return self.inter.process(name, module, outputs)
 
             def register(self, name: str, module: [None | nn.Module]):
                 super().register(name, module)

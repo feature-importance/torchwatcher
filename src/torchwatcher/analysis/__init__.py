@@ -19,6 +19,7 @@ from .observations import analyser_observations
 from .rank import (
     CovarianceSpectrumStatisticsAnalyser,
     LayerWeightRankAnalyser,
+    PerChannelWeightRankAnalyser,
     RankAnalyser,
     compute_cov_spectrum_stats,
     estimate_rank,
@@ -72,6 +73,7 @@ __all__ = [
     "NameAnalyser",
     "NoGradException",
     "NormMean",
+    "PerChannelWeightRankAnalyser",
     "PerClassAnalyser",
     "PerClassVersusAnalyser",
     "Quantile",

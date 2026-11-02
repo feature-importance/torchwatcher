@@ -7,13 +7,14 @@ name = "torchwatcher"
 dynamic = ["version"]
 dependencies = [
     "torch>=2.2.0",
+    "torchvision>=0.17",
     "torchbearer~=0.5.5",
     "numpy>=1.26.0",
     'model-utilities @ git+https://github.com/feature-importance/model-utilities.git@main',
     'pydot>=4.0.0',
     'marimo'
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [
   {name = "Jonathon Hare", email = "jsh2@soton.ac.uk"},
   {name = "Antonia Marcu", email = "a.marcu@soton.ac.uk"},
@@ -29,6 +30,9 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+dataframe = [
+    "pandas>=2.0",
+]
 test = [
     "pytest",
 ]
