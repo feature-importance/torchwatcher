@@ -820,6 +820,9 @@ class PerClassAnalyser(Analyser[Any]):
                                  outputs[classes == c])
 
     def log_backward(self, name, module, grad_input, grad_output):
+        if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):
+            return
+            
         classes = self.targets
 
         for c, analyser in self.analysers.items():
@@ -878,6 +881,9 @@ class PerClassVersusAnalyser(PerClassAnalyser):
                                      outputs[complement_mask])
 
     def log_backward(self, name, module, grad_input, grad_output):
+        if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):
+            return
+        
         classes = self.targets
 
         for class_value in classes.unique():
