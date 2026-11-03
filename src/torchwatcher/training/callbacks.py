@@ -146,6 +146,10 @@ class AnalyserEvaluation(Callback):
             raise ValueError(
                 "compute_gradients must be True when backward is provided"
             )
+        if getattr(analyser, "gradient", False) and backward is None:
+            raise ValueError(
+                "gradient analysers require a backward callback"
+            )
         if sink is not None and not isinstance(sink, ObservationSink):
             raise TypeError("sink must implement ObservationSink or be None")
         if not isinstance(retain_records, bool):

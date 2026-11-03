@@ -418,6 +418,22 @@ def test_analyser_evaluation_rejects_backward_without_gradients():
         raise AssertionError("AnalyserEvaluation accepted backward without gradients")
 
 
+def test_analyser_evaluation_rejects_gradient_analyser_without_backward():
+    analyser = FakeAnalyser()
+    analyser.gradient = True
+    loader = DataLoader(
+        TensorDataset(torch.randn(1, 2), torch.ones(1)),
+        batch_size=1,
+    )
+
+    with pytest.raises(ValueError, match="backward callback"):
+        AnalyserEvaluation(
+            analyser,
+            loader,
+            compute_gradients=True,
+        )
+
+
 def test_analyser_evaluation_composes_with_model_utilities_schedule():
     model = RecordingModel()
     train_loader = DataLoader(
