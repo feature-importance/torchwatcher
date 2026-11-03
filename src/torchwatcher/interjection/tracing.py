@@ -508,7 +508,10 @@ def trace_shapes(model: DualGraphModule, *args):
     from torch._subclasses.fake_tensor import FakeTensorMode
 
     previous_device_type = functorch_config.fake_tensor_prefer_device_type
-    was_training = model.training
+    training_modes = [
+        (module, module.training)
+        for module in model.modules()
+    ]
     functorch_config.fake_tensor_prefer_device_type = 'meta'
     try:
         with FakeTensorMode(allow_non_fake_inputs=True):
@@ -518,7 +521,10 @@ def trace_shapes(model: DualGraphModule, *args):
             ShapeProp(model.eval_module).propagate(*args)
     finally:
         try:
-            model.train(was_training)
+            # Restore exact per-module modes. A recursive model.train() would
+            # overwrite analysers deliberately configured independently.
+            for module, training in training_modes:
+                module.training = training
         finally:
             functorch_config.fake_tensor_prefer_device_type = previous_device_type
 

@@ -565,17 +565,48 @@ def test_trace_shapes_uses_each_graphs_corresponding_mode():
     assert watched_model.eval_module.training
 
 
+@pytest.mark.parametrize(
+    ("model_training", "analyser_training"),
+    [(True, False), (False, True)],
+)
+def test_trace_shapes_restores_independent_analyser_mode(
+        model_training,
+        analyser_training):
+    analyser = NameAnalyser()
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.ReLU()),
+        nn.ReLU,
+        analyser,
+    )
+    watched_model.train(model_training)
+    analyser.train(analyser_training)
+
+    trace_shapes(watched_model, torch.ones(1, 2))
+
+    assert watched_model.training is model_training
+    assert analyser.training is analyser_training
+
+
 def test_trace_shapes_restores_functorch_config_after_failure():
     import torch._functorch.config as functorch_config
 
     previous_device_type = functorch_config.fake_tensor_prefer_device_type
     functorch_config.fake_tensor_prefer_device_type = "cpu"
-    watched_model = trace(nn.Sequential(nn.Linear(2, 1)))
+    analyser = NameAnalyser()
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        analyser,
+    )
+    watched_model.train()
+    analyser.eval()
 
     try:
         with pytest.raises(RuntimeError):
             trace_shapes(watched_model, torch.ones(1, 3))
 
         assert functorch_config.fake_tensor_prefer_device_type == "cpu"
+        assert watched_model.training
+        assert not analyser.training
     finally:
         functorch_config.fake_tensor_prefer_device_type = previous_device_type
