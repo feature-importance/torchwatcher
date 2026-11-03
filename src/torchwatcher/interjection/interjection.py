@@ -155,7 +155,7 @@ class WrappedForwardInterjection(Interjection):
             name,
             self._original_modules[key],
             unpack(args),
-            unpack(y),
+            y,
         )
         return y if processed is None else processed
 

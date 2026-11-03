@@ -22,10 +22,12 @@ class _ModuleRecorder(WrappedForwardInterjection):
         super().__init__()
         self.modules = []
         self.names = []
+        self.outputs = []
 
     def process(self, name, module, inputs, outputs):
         self.names.append(name)
         self.modules.append(module)
+        self.outputs.append(outputs)
 
 
 class _ScaleBackward(WrappedForwardBackwardInterjection):
@@ -368,6 +370,9 @@ def test_wrapped_interjection_preserves_singleton_tuple_output():
     torch.testing.assert_close(result, inputs + 1)
     assert len(interjection.modules) == 1
     assert isinstance(interjection.modules[0], _SingletonTuple)
+    assert isinstance(interjection.outputs[0], tuple)
+    assert len(interjection.outputs[0]) == 1
+    torch.testing.assert_close(interjection.outputs[0][0], inputs)
 
 
 class _AddRepeatedInput(nn.Module):
