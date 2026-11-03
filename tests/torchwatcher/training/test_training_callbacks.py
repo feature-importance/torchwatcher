@@ -4,7 +4,7 @@ import torchbearer
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from torchwatcher.analysis import NameAnalyser
+from torchwatcher.analysis import NameAnalyser, PerClassAnalyser
 from torchwatcher.interjection import interject_by_name
 from torchwatcher.logging import InMemorySink
 from torchwatcher.parameters import selectors
@@ -261,6 +261,62 @@ def test_analyser_evaluation_restores_independent_analyser_mode():
 
     assert model.training
     assert not analyser.training
+
+
+def test_analyser_evaluation_sets_targets_from_labelled_batches():
+    analyser = PerClassAnalyser(NameAnalyser())
+    model = interject_by_name(
+        nn.Sequential(nn.Identity()),
+        "0",
+        analyser,
+    )
+    loader = DataLoader(
+        TensorDataset(
+            torch.randn(4, 2),
+            torch.tensor([0, 0, 1, 1]),
+        ),
+        batch_size=2,
+    )
+    evaluation = AnalyserEvaluation(analyser, loader)
+
+    record = evaluation.record(
+        {torchbearer.MODEL: model},
+        event="manual",
+    )
+
+    assert record["result"] == {
+        0: {"0": "0"},
+        1: {"0": "0"},
+    }
+
+
+def test_analyser_evaluation_accepts_custom_target_preparation():
+    analyser = PerClassAnalyser(NameAnalyser())
+    model = interject_by_name(
+        nn.Sequential(nn.Identity()),
+        "0",
+        analyser,
+    )
+    loader = DataLoader([
+        {"features": torch.randn(2), "label": 3},
+        {"features": torch.randn(2), "label": 4},
+    ], batch_size=2)
+    evaluation = AnalyserEvaluation(
+        analyser,
+        loader,
+        prepare_inputs=lambda batch, device: batch["features"].to(device),
+        prepare_targets=lambda batch, device: batch["label"].to(device),
+    )
+
+    record = evaluation.record(
+        {torchbearer.MODEL: model},
+        event="manual",
+    )
+
+    assert record["result"] == {
+        3: {"0": "0"},
+        4: {"0": "0"},
+    }
 
 
 def test_analyser_evaluation_can_enable_gradient_computation():

@@ -117,6 +117,9 @@ class AnalyserEvaluation(Callback):
         loader: The data loader used for each evaluation.
         prepare_inputs: An optional function converting a batch and device to
             model inputs.
+        prepare_targets: An optional function converting a batch and device to
+            analyser targets. By default, the second item in sequence batches
+            is used when present.
         compute_gradients: Whether evaluation should track gradients.
         backward: An optional function performing or returning a backward
             computation for each batch.
@@ -134,6 +137,7 @@ class AnalyserEvaluation(Callback):
         loader,
         *,
         prepare_inputs: Callable[[Any, torch.device], Any] | None = None,
+        prepare_targets: Callable[[Any, torch.device], Any] | None = None,
         compute_gradients: bool = False,
         backward: Callable[[Any, Any], Any] | None = None,
         records: list[dict] | None = None,
@@ -162,6 +166,7 @@ class AnalyserEvaluation(Callback):
         self.analyser = analyser
         self.loader = loader
         self.prepare_inputs = prepare_inputs or _default_inputs
+        self.prepare_targets = prepare_targets or _default_targets
         self.compute_gradients = compute_gradients
         self.backward = backward
         self.records = [] if records is None else records
@@ -238,6 +243,9 @@ class AnalyserEvaluation(Callback):
                     if self.compute_gradients:
                         model.zero_grad(set_to_none=True)
                     inputs = self.prepare_inputs(batch, device)
+                    targets = self.prepare_targets(batch, device)
+                    if targets is not _NO_TARGET:
+                        self.analyser.targets = targets
                     batch_context = getattr(self.analyser, "batch", nullcontext)
                     with batch_context():
                         outputs = _forward(model, inputs)
@@ -325,6 +333,15 @@ def _model_device(model: nn.Module) -> torch.device:
 def _default_inputs(batch, device):
     inputs = batch[0] if isinstance(batch, Sequence) else batch
     return _to_device(inputs, device)
+
+
+_NO_TARGET = object()
+
+
+def _default_targets(batch, device):
+    if isinstance(batch, Sequence) and len(batch) > 1:
+        return _to_device(batch[1], device)
+    return _NO_TARGET
 
 
 def _to_device(value, device):

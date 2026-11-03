@@ -108,8 +108,10 @@ Each record has the following structure:
 }
 ```
 
-For custom batches, pass `prepare_inputs` to control how batches are moved to
-the model device and passed into the model.
+For target-dependent analysers, the second item in each sequence batch is used
+as the target and moved to the model device. For custom batches, pass
+`prepare_inputs` and `prepare_targets` to control how inputs and targets are
+extracted and moved.
 
 ```python
 evaluation = AnalyserEvaluation(
@@ -119,6 +121,7 @@ evaluation = AnalyserEvaluation(
         "input_ids": batch["input_ids"].to(device),
         "attention_mask": batch["attention_mask"].to(device),
     },
+    prepare_targets=lambda batch, device: batch["label"].to(device),
 )
 ```
 
