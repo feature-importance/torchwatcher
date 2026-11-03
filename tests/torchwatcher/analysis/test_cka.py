@@ -103,6 +103,31 @@ class TestLinearCKAAnalyser(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "no complete CKA batches"):
             analyser.result()
 
+    def test_computes_gram_matrix_after_mixed_precision_promotion(self):
+        analyser = LinearCKAAnalyser(accumulation_dtype=torch.float64)
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser.watch("model"),
+        )
+        features = torch.tensor([
+            [1000.0, 0.0],
+            [0.0, 1000.0],
+            [1000.0, 1000.0],
+            [-1000.0, 0.0],
+        ], dtype=torch.float16)
+
+        with analyser.batch():
+            watched(features)
+
+        result = analyser.result()
+        self.assertEqual(result.values.dtype, torch.float64)
+        self.assertTrue(torch.isfinite(result.values).all())
+        torch.testing.assert_close(
+            result.values,
+            torch.ones_like(result.values),
+        )
+
     def test_requires_an_explicit_batch_boundary(self):
         analyser = LinearCKAAnalyser()
         model = interject_by_name(

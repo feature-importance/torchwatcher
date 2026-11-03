@@ -5,6 +5,12 @@ from .analysis import Analyser, AnalyserState
 from .running_stats import Covariance
 
 
+def _promote_linalg_input(value: torch.Tensor) -> torch.Tensor:
+    if value.dtype in {torch.float16, torch.bfloat16}:
+        return value.float()
+    return value
+
+
 class _FeatureRows:
     """Keep either every feature row or a bounded uniform sample."""
 
@@ -58,6 +64,7 @@ def estimate_rank(features: torch.Tensor,
     Returns:
         the estimated rank
     """
+    features = _promote_linalg_input(features)
     if mode == 'aTa':
         if n > 0:
             perm = torch.randperm(features.shape[1])
@@ -97,6 +104,7 @@ def estimate_rank(features: torch.Tensor,
 def compute_cov_spectrum_stats(covariance: torch.Tensor,
                                threshold=1e-3,
                                taps=10) -> dict:
+    covariance = _promote_linalg_input(covariance)
     s = torch.linalg.svdvals(covariance)
 
     stats = dict()
@@ -137,6 +145,7 @@ class RankAnalyser(Analyser):
                             ) -> Covariance | _FeatureRows:
         features = state.outputs.detach()
         f = features.reshape(features.shape[0], -1)
+        f = _promote_linalg_input(f)
 
         if name not in self.features_dim:
             self.features_dim[name] = f.shape[1]
@@ -219,6 +228,7 @@ class LayerWeightRankAnalyser(Analyser[int]):
             weight = getattr(state.module, 'weight', None)
             if weight is not None:
                 matrix = weight.detach().reshape(weight.shape[0], -1)
+                matrix = _promote_linalg_input(matrix)
                 working_results = matrix_rank(
                     matrix,
                     hermitian=False,
@@ -269,6 +279,7 @@ class PerChannelWeightRankAnalyser(Analyser[torch.Tensor]):
             weight.shape[1],
             -1,
         )
+        matrices = _promote_linalg_input(matrices)
         return matrix_rank(
             matrices,
             hermitian=False,

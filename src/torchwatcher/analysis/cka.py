@@ -155,13 +155,9 @@ class LinearCKAAnalyser(RelationalAnalyser[_CKAAccumulator]):
             raise TypeError("complex-valued activations are not supported")
 
         features = activation.detach().reshape(activation.shape[0], -1)
-        if not features.is_floating_point():
-            features = features.float()
+        features = features.to(dtype=self.accumulation_dtype)
         gram = features @ features.t()
-        gram = gram.to(
-            device=self.accumulation_device,
-            dtype=self.accumulation_dtype,
-        )
+        gram = gram.to(device=self.accumulation_device)
         state.extras[self._gram_cache_key] = gram
         return gram
 

@@ -50,6 +50,41 @@ def test_per_channel_weight_rank_analyser_reports_convolution_filter_ranks():
     torch.testing.assert_close(result, torch.tensor([1, 2, 0]))
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_layer_weight_rank_analyser_supports_low_precision_weights(dtype):
+    model = nn.Sequential(nn.Linear(3, 2, bias=False)).to(dtype)
+    with torch.no_grad():
+        model[0].weight.copy_(torch.tensor([
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ]))
+    analyser = LayerWeightRankAnalyser()
+    watched_model = interject_by_module_class(model, nn.Linear, analyser)
+
+    watched_model(torch.ones(1, 3, dtype=dtype))
+
+    assert analyser.to_dict() == {
+        "0": {"layer_weight_rank": 2},
+    }
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_per_channel_weight_rank_analyser_supports_low_precision_weights(dtype):
+    model = nn.Sequential(nn.Linear(2, 2, bias=False)).to(dtype)
+    with torch.no_grad():
+        model[0].weight.copy_(torch.tensor([
+            [1.0, 0.0],
+            [0.0, 0.0],
+        ]))
+    analyser = PerChannelWeightRankAnalyser()
+    watched_model = interject_by_module_class(model, nn.Linear, analyser)
+
+    watched_model(torch.ones(1, 2, dtype=dtype))
+
+    result = analyser.to_dict()["0"]["per_channel_weight_rank"]
+    torch.testing.assert_close(result, torch.tensor([1, 0]))
+
+
 def test_analyser_list_propagates_original_module_to_weight_rank_analyser():
     model = nn.Sequential(nn.Linear(2, 2, bias=False))
     analyser = LayerWeightRankAnalyser()
@@ -90,6 +125,27 @@ def test_rank_analyser_non_positive_sample_size_uses_every_feature():
         [3.0, 6.0, 0.0],
     ])
     analyser = RankAnalyser(n=-1)
+    watched_model = interject_by_name(
+        nn.Sequential(nn.Identity()),
+        "0",
+        analyser,
+    )
+
+    watched_model(features)
+
+    assert analyser.to_dict()["0"]["features_rank"] == 2
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("mode", ["aTa", "aaT", "a"])
+def test_rank_analyser_supports_low_precision_activations(mode, dtype):
+    features = torch.tensor([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [1.0, 1.0, 0.0],
+    ], dtype=dtype)
+    analyser = RankAnalyser(mode=mode, n=-1)
     watched_model = interject_by_name(
         nn.Sequential(nn.Identity()),
         "0",
