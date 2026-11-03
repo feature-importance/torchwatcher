@@ -12,7 +12,11 @@ from torchwatcher.analysis import (
     PerClassAnalyser,
     PerClassVersusAnalyser,
 )
-from torchwatcher.interjection import interject_by_match, interject_by_name
+from torchwatcher.interjection import (
+    interject_by_match,
+    interject_by_module_class_native,
+    interject_by_name,
+)
 from torchwatcher.interjection.node_selector import NodeSelector
 
 
@@ -28,6 +32,15 @@ class _BatchSizeAnalyser(Analyser):
     def process_batch_state(self, name, state, working_results):
         count = 0 if working_results is None else working_results
         return count + state.outputs.shape[0]
+
+
+class _GradientCallCountAnalyser(Analyser):
+    def __init__(self):
+        super().__init__(gradient=True)
+
+    def process_batch_state(self, name, state, working_results):
+        count = 0 if working_results is None else working_results
+        return count + 1
 
 
 class _BufferedAnalyser(_BatchSizeAnalyser):
@@ -226,6 +239,46 @@ class TestAnalyserEnablement(unittest.TestCase):
 
         self.assertEqual(analyser.current_states, {})
         self.assertEqual(analyser.to_dict(), {})
+
+
+class TestGradientAnalyserState(unittest.TestCase):
+    def test_records_repeated_native_module_calls(self):
+        class ReusedModule(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.relu = nn.ReLU()
+
+            def forward(self, inputs):
+                return self.relu(inputs) + self.relu(inputs)
+
+        analyser = _GradientCallCountAnalyser()
+        watched = interject_by_module_class_native(
+            ReusedModule(),
+            nn.ReLU,
+            analyser,
+        )
+        inputs = torch.ones(2, requires_grad=True)
+
+        watched(inputs).sum().backward()
+
+        self.assertEqual(analyser.to_dict(), {"relu": 2})
+        self.assertEqual(analyser.current_states, {})
+
+    def test_records_multiple_forwards_before_combined_backward(self):
+        analyser = _GradientCallCountAnalyser()
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        first = torch.ones(2, requires_grad=True)
+        second = torch.ones(2, requires_grad=True)
+
+        outputs = watched(first) + watched(second)
+        outputs.sum().backward()
+
+        self.assertEqual(analyser.to_dict(), {"0": 2})
+        self.assertEqual(analyser.current_states, {})
 
 
 class TestPerClassAnalyser(unittest.TestCase):

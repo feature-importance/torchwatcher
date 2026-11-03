@@ -121,7 +121,7 @@ class Analyser[T](WrappedForwardInterjection):
     def __init__(self, gradient=False):
         super().__init__()
 
-        self.current_states: dict[str, AnalyserState] = {}
+        self.current_states: dict[str, list[AnalyserState]] = {}
         self.working_results: dict[str, Any] = {}
 
         self.gradient = gradient
@@ -356,7 +356,7 @@ class Analyser[T](WrappedForwardInterjection):
             self.current_states.pop(name, None)
             return
 
-        s = self.current_states[name] = AnalyserState()
+        s = AnalyserState()
         s._name = name
         s._module = module
         s._inputs = inputs
@@ -365,7 +365,9 @@ class Analyser[T](WrappedForwardInterjection):
             s._targets = self._targets
             s._targets_set = True
 
+        self.current_states.setdefault(name, []).append(s)
         if not self.gradient:
+            self._pop_current_state(name)
             self.finalize_state(s)
 
     def log_backward(self, name, _, grad_input, grad_output):
@@ -373,7 +375,7 @@ class Analyser[T](WrappedForwardInterjection):
             self.current_states.pop(name, None)
             return
 
-        s = self.current_states.get(name)
+        s = self._pop_current_state(name)
         if s is None:
             return
 
@@ -383,6 +385,16 @@ class Analyser[T](WrappedForwardInterjection):
         s._output_gradients_set = True
 
         self.finalize_state(s)
+
+    def _pop_current_state(self, name: str) -> AnalyserState | None:
+        states = self.current_states.get(name)
+        if not states:
+            return None
+
+        state = states.pop()
+        if not states:
+            del self.current_states[name]
+        return state
 
     @property
     def targets(self):
@@ -397,7 +409,6 @@ class Analyser[T](WrappedForwardInterjection):
 
     def finalize_state(self, state: AnalyserState):
         name = state.name
-        self.current_states.pop(name, None)
 
         # only if enabled do the updates
         if not self.enabled:
