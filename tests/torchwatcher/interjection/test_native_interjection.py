@@ -3,6 +3,7 @@ from torch import nn
 
 from torchwatcher.interjection import (
     ForwardInterjection,
+    WrappedForwardInterjection,
     interject_by_module_class_native,
 )
 
@@ -15,6 +16,11 @@ class _RecordingReplacement(ForwardInterjection):
     def process(self, name, module, inputs):
         self.calls.append((name, module, inputs.detach().clone()))
         return inputs + 5
+
+
+class _RecordingWrappedInterjection(WrappedForwardInterjection):
+    def process(self, name, module, inputs, outputs):
+        pass
 
 
 def test_native_forward_interjection_observes_and_replaces_module_output():
@@ -36,3 +42,37 @@ def test_native_forward_interjection_observes_and_replaces_module_output():
     torch.testing.assert_close(observed, torch.tensor([[0.0, 3.0]]))
     torch.testing.assert_close(outputs, torch.tensor([[5.0, 8.0]]))
     torch.testing.assert_close(model(inputs), torch.tensor([[0.0, 3.0]]))
+
+
+def test_native_interjection_mode_does_not_change_eval_model_operation():
+    interjection = _RecordingWrappedInterjection()
+    watched_model = interject_by_module_class_native(
+        nn.Sequential(nn.Dropout(p=1.0)),
+        nn.Dropout,
+        interjection,
+    )
+    watched_model.eval()
+
+    interjection.train()
+
+    torch.testing.assert_close(
+        watched_model(torch.ones(4)),
+        torch.ones(4),
+    )
+
+
+def test_native_interjection_mode_does_not_change_train_model_operation():
+    interjection = _RecordingWrappedInterjection()
+    watched_model = interject_by_module_class_native(
+        nn.Sequential(nn.Dropout(p=1.0)),
+        nn.Dropout,
+        interjection,
+    )
+    watched_model.train()
+
+    interjection.eval()
+
+    torch.testing.assert_close(
+        watched_model(torch.ones(4)),
+        torch.zeros(4),
+    )

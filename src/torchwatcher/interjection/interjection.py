@@ -105,10 +105,13 @@ class WrappedForwardInterjection(Interjection):
         # Native interjections wrap the original module directly. FX-based
         # interjections replace this value through register_original_module.
         self._original_modules[key] = module
-        module_name = name.replace(".", "_")
         if isinstance(key, tuple):
+            # Extracted FX operations belong to the interjection. Native
+            # operations are already owned by their _NameWrapper; registering
+            # them here as well would let the analyser's mode change the model.
+            module_name = name.replace(".", "_")
             module_name += "_train" if key[1] else "_eval"
-        self.add_module(module_name, module)
+            self.add_module(module_name, module)
 
     def register_original_module(self, name: str, module: nn.Module | None):
         self._original_modules[self._registration_key(name)] = module

@@ -148,6 +148,8 @@ class Analyser[T](WrappedForwardInterjection):
     def reset(self):
         self.current_states = {}
         self.working_results = {}
+        self._targets = None
+        self._targets_set = False
 
     @contextmanager
     def batch(self) -> Iterator[None]:

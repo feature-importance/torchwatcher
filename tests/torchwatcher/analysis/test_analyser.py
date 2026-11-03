@@ -95,6 +95,29 @@ class TestAnalyserRun(unittest.TestCase):
 
         self.assertEqual(result, {"1": targets.sum().item()})
 
+    def test_reset_run_does_not_reuse_targets_from_a_previous_run(self):
+        analyser = PerClassAnalyser(NameAnalyser())
+        watched = interject_by_name(
+            nn.Sequential(nn.Linear(3, 4), nn.ReLU()),
+            "1",
+            analyser,
+        )
+        labelled = TensorDataset(
+            torch.randn(4, 3),
+            torch.tensor([0, 0, 1, 1]),
+        )
+        unlabelled = TensorDataset(torch.randn(2, 3))
+
+        self.assertEqual(
+            analyser.run(watched, labelled, batch_size=2),
+            {0: {"1": "1"}, 1: {"1": "1"}},
+        )
+
+        self.assertEqual(
+            analyser.run(watched, unlabelled, batch_size=2),
+            {},
+        )
+
     def test_accepts_custom_input_preparation(self):
         analyser = NameAnalyser()
         watched = interject_by_name(
