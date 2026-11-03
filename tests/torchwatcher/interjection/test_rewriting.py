@@ -58,6 +58,7 @@ def test_parameterised_replacement_is_shared_between_train_and_eval():
 def test_replace_restores_source_mode_after_failure():
     model = _RaisesInEval()
     model.train()
+    model.linear.eval()
 
     with pytest.raises(RuntimeError, match="eval tracing failed"):
         replace(
@@ -70,6 +71,7 @@ def test_replace_restores_source_mode_after_failure():
         )
 
     assert model.training
+    assert not model.linear.training
 
 
 def test_replace_does_not_mutate_tracer_kwargs():

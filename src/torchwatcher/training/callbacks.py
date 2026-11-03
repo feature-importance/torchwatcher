@@ -26,6 +26,7 @@ from torchwatcher.training.scheduling import (
     TrainingClock,
     as_iteration_predicate,
 )
+from torchwatcher.utils import preserve_training_modes
 
 _PARAMETER_CALLBACK_EVENTS = {
     "on_start",
@@ -222,44 +223,43 @@ class AnalyserEvaluation(Callback):
     def record(self, state, *, event, global_step=None) -> dict:
         model = state[torchbearer.MODEL]
         device = _model_device(model)
-        was_training = model.training
-        analyser_was_training = (
-            self.analyser.training
-            if isinstance(self.analyser, nn.Module)
-            else None
-        )
         was_enabled = self.analyser.enabled
         saved_gradients = (
             _save_gradients(model) if self.compute_gradients else None
         )
 
-        self.analyser.reset()
-        self.analyser.enabled = True
-        model.eval()
+        mode_roots = [model]
+        if isinstance(self.analyser, nn.Module):
+            mode_roots.append(self.analyser)
+        with preserve_training_modes(*mode_roots):
+            try:
+                self.analyser.reset()
+                self.analyser.enabled = True
+                model.eval()
 
-        try:
-            with torch.set_grad_enabled(self.compute_gradients):
-                for batch in self.loader:
-                    if self.compute_gradients:
-                        model.zero_grad(set_to_none=True)
-                    inputs = self.prepare_inputs(batch, device)
-                    targets = self.prepare_targets(batch, device)
-                    if targets is not _NO_TARGET:
-                        self.analyser.targets = targets
-                    batch_context = getattr(self.analyser, "batch", nullcontext)
-                    with batch_context():
-                        outputs = _forward(model, inputs)
-                        if self.backward is not None:
-                            _backward(self.backward, outputs, batch)
-            result = self.analyser.to_dict()
-        finally:
-            if self.compute_gradients:
-                model.zero_grad(set_to_none=True)
-                _restore_gradients(model, saved_gradients)
-            self.analyser.enabled = was_enabled
-            model.train(was_training)
-            if analyser_was_training is not None:
-                self.analyser.train(analyser_was_training)
+                with torch.set_grad_enabled(self.compute_gradients):
+                    for batch in self.loader:
+                        if self.compute_gradients:
+                            model.zero_grad(set_to_none=True)
+                        inputs = self.prepare_inputs(batch, device)
+                        targets = self.prepare_targets(batch, device)
+                        if targets is not _NO_TARGET:
+                            self.analyser.targets = targets
+                        batch_context = getattr(
+                            self.analyser,
+                            "batch",
+                            nullcontext,
+                        )
+                        with batch_context():
+                            outputs = _forward(model, inputs)
+                            if self.backward is not None:
+                                _backward(self.backward, outputs, batch)
+                result = self.analyser.to_dict()
+            finally:
+                if self.compute_gradients:
+                    model.zero_grad(set_to_none=True)
+                    _restore_gradients(model, saved_gradients)
+                self.analyser.enabled = was_enabled
 
         if global_step is None:
             global_step = state.get(GLOBAL_STEP, self._last_recorded_step)

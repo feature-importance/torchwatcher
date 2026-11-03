@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any, Callable, Type
 
 from .node_selector import NodeSelector
 from ..nn import GradientIdentity
+from ..utils import preserve_training_modes
 from .tracing import (
     symbolic_trace,
     DualGraphModule,
@@ -110,7 +111,7 @@ def replace(model: nn.Module, selector: NodeSelector,
 
     tracer_kwargs = _copy_tracer_kwargs(tracer_kwargs)
 
-    try:
+    with preserve_training_modes(model):
         graphs = {}
         graphmodules = {}
         replacements = {}
@@ -147,10 +148,7 @@ def replace(model: nn.Module, selector: NodeSelector,
             graphmodules["eval"],
             class_name="DualGraphModule_" + _get_name(model),
         )
-    finally:
-        model.train(is_training)
-
-    graph_module.train(is_training)
+        graph_module.train(is_training)
 
     return graph_module
 

@@ -70,6 +70,26 @@ class TestAnalyserRun(unittest.TestCase):
         self.assertTrue(watched.training)
         self.assertFalse(analyser.enabled)
 
+    def test_restores_mixed_module_training_modes(self):
+        analyser = NameAnalyser()
+        watched = interject_by_name(
+            nn.Sequential(nn.BatchNorm1d(2), nn.ReLU()),
+            "1",
+            analyser,
+        )
+        watched.train()
+        batch_norm = watched.train_module.get_submodule("0")
+        batch_norm.eval()
+
+        analyser.run(
+            watched,
+            TensorDataset(torch.randn(4, 2)),
+            batch_size=2,
+        )
+
+        self.assertTrue(watched.training)
+        self.assertFalse(batch_norm.training)
+
     def test_rejects_analyser_list_containing_gradient_analyser(self):
         analyser = AnalyserList(NameAnalyser(), _OutputGradientAnalyser())
         watched = interject_by_name(

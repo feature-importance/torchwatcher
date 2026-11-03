@@ -21,6 +21,7 @@ from .interjection import (
 )
 from .node_selector import NodeSelector, matches_module_class
 from ..nn import GradientIdentity
+from ..utils import preserve_training_modes
 
 
 class DualGraphModule(nn.Module):
@@ -428,7 +429,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
         tracer_kwargs['leaf_modules'] = []
     tracer_kwargs['leaf_modules'].append(GradientIdentity)
 
-    try:
+    with preserve_training_modes(model):
         graphmodules = {}
         for mode in ["train", "eval"]:
             if mode == "train":
@@ -457,10 +458,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
             graphmodules["eval"],
             class_name="DualGraphModule_" + _get_name(model),
         )
-    finally:
-        model.train(is_training)
-
-    graph_module.train(is_training)
+        graph_module.train(is_training)
 
     return graph_module
 
@@ -510,25 +508,16 @@ def trace_shapes(model: DualGraphModule, *args):
     from torch._subclasses.fake_tensor import FakeTensorMode
 
     previous_device_type = functorch_config.fake_tensor_prefer_device_type
-    training_modes = [
-        (module, module.training)
-        for module in model.modules()
-    ]
     functorch_config.fake_tensor_prefer_device_type = 'meta'
     try:
-        with FakeTensorMode(allow_non_fake_inputs=True):
-            model.train_module.train()
-            ShapeProp(model.train_module).propagate(*args)
-            model.eval_module.eval()
-            ShapeProp(model.eval_module).propagate(*args)
+        with preserve_training_modes(model):
+            with FakeTensorMode(allow_non_fake_inputs=True):
+                model.train_module.train()
+                ShapeProp(model.train_module).propagate(*args)
+                model.eval_module.eval()
+                ShapeProp(model.eval_module).propagate(*args)
     finally:
-        try:
-            # Restore exact per-module modes. A recursive model.train() would
-            # overwrite analysers deliberately configured independently.
-            for module, training in training_modes:
-                module.training = training
-        finally:
-            functorch_config.fake_tensor_prefer_device_type = previous_device_type
+        functorch_config.fake_tensor_prefer_device_type = previous_device_type
 
 
 def trim(network: fx.GraphModule):

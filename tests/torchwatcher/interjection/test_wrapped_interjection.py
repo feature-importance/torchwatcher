@@ -576,6 +576,17 @@ class _RaisesInEval(nn.Module):
         return inputs
 
 
+def test_trace_restores_mixed_source_modes():
+    model = nn.Sequential(nn.BatchNorm1d(2), nn.ReLU())
+    model.train()
+    model[0].eval()
+
+    trace(model)
+
+    assert model.training
+    assert not model[0].training
+
+
 def test_trace_restores_source_mode_after_failure():
     model = _RaisesInEval()
     model.train()
@@ -637,6 +648,34 @@ def test_trace_shapes_restores_independent_analyser_mode(
 
     assert watched_model.training is model_training
     assert analyser.training is analyser_training
+
+
+class _TrainSideEffect(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.phase = "train"
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.phase = "train" if mode else "eval"
+        return self
+
+    def forward(self, inputs):
+        return inputs
+
+
+def test_trace_shapes_restores_custom_train_side_effects():
+    watched_model = trace(
+        nn.Sequential(_TrainSideEffect()),
+        tracer_kwargs={"leaf_modules": [_TrainSideEffect]},
+    )
+    module = watched_model.train_module.get_submodule("0")
+    watched_model.train()
+
+    trace_shapes(watched_model, torch.ones(1, 2))
+
+    assert module.training
+    assert module.phase == "train"
 
 
 def test_trace_shapes_restores_functorch_config_after_failure():

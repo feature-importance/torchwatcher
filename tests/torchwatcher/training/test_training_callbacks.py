@@ -263,6 +263,24 @@ def test_analyser_evaluation_restores_independent_analyser_mode():
     assert not analyser.training
 
 
+def test_analyser_evaluation_restores_mixed_model_modes():
+    model = nn.Sequential(nn.BatchNorm1d(2), nn.Linear(2, 1))
+    model.train()
+    model[0].eval()
+    evaluation = AnalyserEvaluation(
+        FakeAnalyser(),
+        DataLoader(TensorDataset(torch.randn(2, 2)), batch_size=1),
+    )
+
+    evaluation.record(
+        {torchbearer.MODEL: model},
+        event="manual",
+    )
+
+    assert model.training
+    assert not model[0].training
+
+
 def test_analyser_evaluation_sets_targets_from_labelled_batches():
     analyser = PerClassAnalyser(NameAnalyser())
     model = interject_by_name(

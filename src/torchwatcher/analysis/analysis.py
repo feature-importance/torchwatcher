@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 
 from torchwatcher.interjection import WrappedForwardBackwardInterjection, \
     WrappedForwardInterjection
+from torchwatcher.utils import preserve_training_modes
 
 
 class TargetException(Exception):
@@ -262,38 +263,31 @@ class Analyser[T](WrappedForwardInterjection):
         target_device = next(iter(devices.values()))
 
         was_enabled = self.enabled
-        analyser_was_training = self.training
-        training_modes = {
-            source: watched_model.training
-            for source, watched_model in models.items()
-        }
-        if reset:
-            self.reset()
-        self.enabled = True
-        if eval_mode:
-            self.eval()
-            for watched_model in models.values():
-                watched_model.eval()
+        with preserve_training_modes(*models.values(), self):
+            if reset:
+                self.reset()
+            self.enabled = True
+            if eval_mode:
+                self.eval()
+                for watched_model in models.values():
+                    watched_model.eval()
 
-        try:
-            with torch.no_grad():
-                for raw_batch in loader:
-                    targets = target_preparer(raw_batch, target_device)
-                    if targets is not _NO_ANALYSIS_TARGET:
-                        self.targets = targets
-                    with self.batch():
-                        for source, watched_model in models.items():
-                            inputs = preparers[source](
-                                raw_batch,
-                                devices[source],
-                            )
-                            _analysis_forward(watched_model, inputs)
-            return self.to_dict()
-        finally:
-            self.enabled = was_enabled
-            for source, watched_model in models.items():
-                watched_model.train(training_modes[source])
-            self.train(analyser_was_training)
+            try:
+                with torch.no_grad():
+                    for raw_batch in loader:
+                        targets = target_preparer(raw_batch, target_device)
+                        if targets is not _NO_ANALYSIS_TARGET:
+                            self.targets = targets
+                        with self.batch():
+                            for source, watched_model in models.items():
+                                inputs = preparers[source](
+                                    raw_batch,
+                                    devices[source],
+                                )
+                                _analysis_forward(watched_model, inputs)
+                return self.to_dict()
+            finally:
+                self.enabled = was_enabled
 
     def _normalise_run_models(
         self,
