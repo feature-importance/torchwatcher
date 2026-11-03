@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from torchwatcher.analysis import NameAnalyser, analyser_observations
 from torchwatcher.interjection import (
     ForwardInterjection,
     WrappedForwardBackwardInterjection,
@@ -76,8 +77,51 @@ def test_native_interjection_can_wrap_the_root_module():
     outputs = watched_model(torch.tensor([-2.0, 3.0]))
 
     assert len(interjection.calls) == 1
-    assert interjection.calls[0][0] == ""
+    assert interjection.calls[0][0] == "root"
     torch.testing.assert_close(outputs, torch.tensor([5.0, 8.0]))
+
+
+def test_native_root_analyser_produces_valid_observations():
+    analyser = NameAnalyser()
+    watched_model = interject_by_module_class_native(
+        nn.ReLU(),
+        nn.ReLU,
+        analyser,
+    )
+
+    watched_model(torch.tensor([-2.0, 3.0]))
+    observations = list(analyser_observations(analyser))
+
+    assert analyser.to_dict() == {"root": "root"}
+    assert [observation.path for observation in observations] == [
+        ("analysers", "NameAnalyser", "root"),
+    ]
+
+
+class _NestedTarget(nn.Module):
+    def __init__(self, child=None):
+        super().__init__()
+        if child is not None:
+            self.root = child
+
+    def forward(self, inputs):
+        if hasattr(self, "root"):
+            return self.root(inputs)
+        return inputs
+
+
+def test_native_root_name_does_not_collide_with_child_name():
+    interjection = _RecordingReplacement()
+    watched_model = interject_by_module_class_native(
+        _NestedTarget(_NestedTarget()),
+        _NestedTarget,
+        interjection,
+    )
+
+    outputs = watched_model(torch.tensor([1.0]))
+
+    assert [call[0] for call in interjection.calls] == ["root", "root@1"]
+    torch.testing.assert_close(outputs, torch.tensor([11.0]))
 
 
 def test_native_interjection_observes_every_call_to_a_shared_module():

@@ -542,11 +542,25 @@ def interject_by_module_class_native(model: nn.Module,
         interjection: the interjection to insert
         clone: whether to clone the model before interjecting (default True)
 
+    A matched root module is reported as ``"root"``. If that name is already
+    used by a module in the model, a numeric ``@`` suffix is added.
+
     Returns:
         the interjected model
     """
     if clone:
         model = copy.deepcopy(model)
+
+    existing_names = {
+        name
+        for name, _ in model.named_modules(remove_duplicate=False)
+        if name
+    }
+    root_name = "root"
+    suffix = 1
+    while root_name in existing_names:
+        root_name = f"root@{suffix}"
+        suffix += 1
 
     if isinstance(interjection, ForwardInterjection):
         class _Wrapped(WrappedForwardInterjection):
@@ -564,7 +578,7 @@ def interject_by_module_class_native(model: nn.Module,
 
         interjection = _Wrapped(interjection)
 
-    def add_interjection(name, module):
+    def add_interjection(name, module, *, is_root=False):
         class _NativeCall(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -581,7 +595,7 @@ def interject_by_module_class_native(model: nn.Module,
         class _NameWrapper(nn.Module):
             def __init__(self):
                 super().__init__()
-                if not name:
+                if is_root:
                     nm = "_torchwatcher_wrapped"
                 elif "." in name:
                     _, nm = name.rsplit(".", 1)
@@ -600,7 +614,12 @@ def interject_by_module_class_native(model: nn.Module,
 
     traversed: set[int] = set()
 
-    def add_recursively(module: nn.Module, name: str = "") -> nn.Module:
+    def add_recursively(
+            module: nn.Module,
+            name: str = "",
+            *,
+            is_root: bool = False,
+    ) -> nn.Module:
         module_id = id(module)
         is_target = isinstance(module, target_module_class)
         if module_id not in traversed:
@@ -615,6 +634,13 @@ def interject_by_module_class_native(model: nn.Module,
                 if replacement is not child:
                     setattr(module, child_name, replacement)
 
-        return add_interjection(name, module) if is_target else module
+        if not is_target:
+            return module
+        observation_name = root_name if is_root else name
+        return add_interjection(
+            observation_name,
+            module,
+            is_root=is_root,
+        )
 
-    return add_recursively(model)
+    return add_recursively(model, is_root=True)
