@@ -6,6 +6,7 @@ from torch import nn
 from torchwatcher.analysis import NameAnalyser
 from torchwatcher.drawing import draw_graph, draw_graph_pretty
 from torchwatcher.interjection import (
+    ForwardInterjection,
     WrappedForwardBackwardInterjection,
     WrappedForwardInterjection,
     interject_by_match,
@@ -376,6 +377,11 @@ class _UsesSingletonTuple(nn.Module):
         return self.tuple(inputs)[0] + 1
 
 
+class _SingletonTupleReplacement(ForwardInterjection):
+    def process(self, name, module, inputs):
+        return (inputs[0] + 1,)
+
+
 def test_wrapped_interjection_preserves_singleton_tuple_output():
     interjection = _ModuleRecorder()
     watched_model = interject_by_module_class(
@@ -393,6 +399,32 @@ def test_wrapped_interjection_preserves_singleton_tuple_output():
     assert isinstance(interjection.outputs[0], tuple)
     assert len(interjection.outputs[0]) == 1
     torch.testing.assert_close(interjection.outputs[0][0], inputs)
+
+
+def test_forward_interjection_preserves_singleton_tuple_replacement():
+    interjection = _SingletonTupleReplacement()
+    interjection.register("tuple", None)
+    inputs = torch.arange(4.0).reshape(2, 2)
+
+    result = interjection("tuple", (inputs,))
+
+    assert isinstance(result, tuple)
+    assert len(result) == 1
+    torch.testing.assert_close(result[0], inputs + 1)
+
+
+def test_inserted_forward_interjection_preserves_singleton_tuple_replacement():
+    interjection = _SingletonTupleReplacement()
+    watched_model = interject_by_module_class(
+        _UsesSingletonTuple(),
+        _SingletonTuple,
+        interjection,
+    )
+    inputs = torch.arange(4.0).reshape(2, 2)
+
+    result = watched_model(inputs)
+
+    torch.testing.assert_close(result, inputs + 2)
 
 
 class _AddRepeatedInput(nn.Module):

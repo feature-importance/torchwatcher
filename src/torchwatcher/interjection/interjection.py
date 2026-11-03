@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.utils.hooks import RemovableHandle
 
-from torchwatcher.utils import unpack, x_if_xp_is_none
+from torchwatcher.utils import unpack
 
 
 class Interjection(nn.Module, metaclass=abc.ABCMeta):
@@ -69,9 +69,9 @@ class ForwardInterjection(Interjection):
         pass
 
     def forward(self, name, *args):
-        return unpack(
-            x_if_xp_is_none(args, self
-                            .process(name, self._prev_node[name], unpack(args))))
+        inputs = unpack(args)
+        processed = self.process(name, self._prev_node[name], inputs)
+        return inputs if processed is None else processed
 
 
 class WrappedForwardInterjection(Interjection):
