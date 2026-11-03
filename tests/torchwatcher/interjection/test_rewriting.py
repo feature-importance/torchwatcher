@@ -2,7 +2,7 @@ import torch
 import pytest
 from torch import nn
 
-from torchwatcher.interjection import replace
+from torchwatcher.interjection import replace, replace_module_native
 from torchwatcher.interjection.node_selector import matches_module_class
 
 
@@ -88,3 +88,39 @@ def test_replace_does_not_mutate_tracer_kwargs():
 
     assert tracer_kwargs == {"leaf_modules": [_RaisesInEval]}
     assert tracer_kwargs["leaf_modules"] is leaf_modules
+
+
+def test_native_replacement_can_replace_the_root_module():
+    replacement = nn.Identity()
+
+    replaced = replace_module_native(
+        nn.ReLU(),
+        nn.ReLU,
+        lambda original: replacement,
+    )
+
+    assert replaced is replacement
+
+
+def test_native_replacement_preserves_shared_module_aliases():
+    model = nn.Module()
+    shared = nn.Linear(2, 2)
+    model.left = shared
+    model.right = shared
+    replacements = []
+
+    def create_replacement(original):
+        replacement = nn.Linear(2, 2)
+        replacements.append(replacement)
+        return replacement
+
+    replaced = replace_module_native(
+        model,
+        nn.Linear,
+        create_replacement,
+        clone=False,
+    )
+
+    assert len(replacements) == 1
+    assert replaced.left is replacements[0]
+    assert replaced.right is replacements[0]

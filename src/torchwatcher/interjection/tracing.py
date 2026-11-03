@@ -567,14 +567,26 @@ def interject_by_module_class_native(model: nn.Module,
 
         interjection = _Wrapped(interjection)
 
-    module_names = {v: k for k, v in model.named_modules()}
-    def add_interjection(module):
-        name = module_names[module]
+    def add_interjection(name, module):
+        class _NativeCall(nn.Module):
+            def __init__(self):
+                super().__init__()
+                # The model wrapper owns the module. Keep only a non-registering
+                # reference here so hook dispatch does not change state-dict keys
+                # or let the interjection control the module lifecycle.
+                self._module = (module,)
+
+            def forward(self, *args, **kwargs):
+                return self._module[0](*args, **kwargs)
+
+        native_call = _NativeCall()
 
         class _NameWrapper(nn.Module):
             def __init__(self):
                 super().__init__()
-                if "." in name:
+                if not name:
+                    nm = "_torchwatcher_wrapped"
+                elif "." in name:
                     _, nm = name.rsplit(".", 1)
                 else:
                     nm = name
@@ -583,8 +595,29 @@ def interject_by_module_class_native(model: nn.Module,
             def forward(self, *args, **kwargs):
                 return interjection.forward(name, *args, **kwargs)
 
-        interjection.register(name, module)
+        # Each alias gets its own call module so names and backward hooks stay
+        # distinct, while every alias wrapper owns the same original module.
+        interjection.register(name, native_call)
+        interjection.register_original_module(name, module)
         return _NameWrapper()
 
-    from .rewriting import replace_module_native
-    return replace_module_native(model, target_module_class, add_interjection, clone=False)
+    traversed: set[int] = set()
+
+    def add_recursively(module: nn.Module, name: str = "") -> nn.Module:
+        module_id = id(module)
+        is_target = isinstance(module, target_module_class)
+        if module_id not in traversed:
+            traversed.add(module_id)
+            for child_name, child in list(module._modules.items()):
+                if child is None:
+                    continue
+                qualified_name = (
+                    f"{name}.{child_name}" if name else child_name
+                )
+                replacement = add_recursively(child, qualified_name)
+                if replacement is not child:
+                    setattr(module, child_name, replacement)
+
+        return add_interjection(name, module) if is_target else module
+
+    return add_recursively(model)

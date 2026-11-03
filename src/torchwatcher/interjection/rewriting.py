@@ -175,32 +175,36 @@ def replace_module_native(model, target_class: Type[nn.Module],
     if clone:
         model = copy.deepcopy(model)
 
-    # We convert to a list and reverse it to perform a bottom-up replacement.
-    # This prevents issues where replacing a parent module makes its
-    # children unreachable during iteration.
-    modules = list(model.named_modules())
+    replacements: dict[int, nn.Module] = {}
+    in_progress: set[int] = set()
 
-    for name, module in reversed(modules):
-        if isinstance(module, target_class):
-            # Identify the parent and the attribute name
-            if name == "":
-                # This is the root model itself
-                # Replacing the root is tricky; we can't setattr 'self'
-                # easily within this loop, but we can replace its components.
-                continue
+    def replace_recursively(module: nn.Module) -> nn.Module:
+        module_id = id(module)
+        if module_id in replacements:
+            return replacements[module_id]
+        if module_id in in_progress:
+            return module
 
-            # Split the name into path and the final attribute name
-            # e.g., 'features.0.conv' -> ['features', '0'], 'conv'
-            parts = name.split('.')
-            attr_name = parts[-1]
+        in_progress.add(module_id)
+        try:
+            # Walk the registration mapping directly so shared aliases are not
+            # removed as they are by named_modules(). Recurse first to retain
+            # the existing bottom-up replacement behaviour.
+            for name, child in list(module._modules.items()):
+                if child is None:
+                    continue
+                replacement = replace_recursively(child)
+                if replacement is not child:
+                    setattr(module, name, replacement)
 
-            # Traverse to the parent module
-            parent = model
-            for part in parts[:-1]:
-                parent = getattr(parent, part)
+            replacement = (
+                create_replacement(module)
+                if isinstance(module, target_class)
+                else module
+            )
+            replacements[module_id] = replacement
+            return replacement
+        finally:
+            in_progress.remove(module_id)
 
-            # Replace the module
-            new_module = create_replacement(module)
-            setattr(parent, attr_name, new_module)
-
-    return model
+    return replace_recursively(model)
