@@ -227,8 +227,6 @@ def add_interjection(graph_module: fx.GraphModule,
 def handle_inplace(
         graph_module: fx.GraphModule,
         node: fx.Node,
-        *,
-        require_out_of_place: bool = False,
 ) -> fx.Node:
     # handle modules with 'inplace' flags
     if (node.op == 'call_module' and
@@ -252,7 +250,7 @@ def handle_inplace(
 
             if replacement is not None:
                 node.target = replacement
-            elif require_out_of_place:
+            else:
                 raise ValueError(
                     f"cannot wrap in-place function {node.target!r} with a "
                     "backward interjection: no out-of-place counterpart was "
@@ -263,7 +261,7 @@ def handle_inplace(
         replacement = node.target[:-1]
         if hasattr(torch.Tensor, replacement):
             node.target = replacement
-        elif require_out_of_place:
+        else:
             raise ValueError(
                 f"cannot wrap in-place method {node.target!r} with a "
                 "backward interjection: no out-of-place counterpart was "
@@ -310,14 +308,18 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
         if node.op == 'call_module'
         else None
     )
-    node = handle_inplace(
-        graph_module,
-        node,
-        require_out_of_place=(
-            isinstance(interjection, WrappedForwardBackwardInterjection)
-            or getattr(interjection, 'gradient', False)
-        ),
+    requires_out_of_place = (
+        isinstance(interjection, WrappedForwardBackwardInterjection)
+        or getattr(interjection, 'gradient', False)
     )
+    if hasattr(interjection, '_wrapped') and node.op == 'call_module':
+        # Each traced mode needs its own module object so that the wrapped train
+        # and eval operations can retain independent training flags. Parameters
+        # and buffers remain shared with the original module.
+        module = copy.copy(graph_module.get_submodule(node.target))
+        graph_module.set_submodule(node.target, module)
+    if requires_out_of_place:
+        node = handle_inplace(graph_module, node)
 
     if hasattr(interjection, '_wrapped'):
         with graph_module.graph.inserting_after(node):

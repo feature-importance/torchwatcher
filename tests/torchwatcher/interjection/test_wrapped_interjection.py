@@ -161,6 +161,26 @@ def test_backward_interjection_rejects_unsupported_inplace_method():
         )
 
 
+def test_forward_interjection_preserves_inplace_alias_semantics():
+    class _AliasedInplaceReLU(nn.Module):
+        def forward(self, inputs):
+            aliased = inputs.clone()
+            activated = torch.relu_(aliased)
+            return aliased + activated
+
+    model = _AliasedInplaceReLU()
+    selector = NodeSelector(
+        lambda state: (
+            state[1].op == "call_function"
+            and state[1].target is torch.relu_
+        )
+    )
+    watched_model = interject_by_match(model, selector, NameAnalyser())
+    inputs = torch.tensor([-1.0, 2.0])
+
+    torch.testing.assert_close(watched_model(inputs), model(inputs))
+
+
 def test_interjection_does_not_mutate_source_model():
     model = nn.Sequential(nn.Linear(2, 1))
     modules_before = dict(model.named_modules())
@@ -206,7 +226,7 @@ def test_interjection_does_not_mutate_source_inplace_module():
         ).get_submodule("0")
         assert wrapped_module is not source_module
         assert wrapped_module.weight is source_module.weight
-        assert not wrapped_module.inplace
+        assert wrapped_module.inplace
 
     result = watched_model(torch.ones(2))
 
