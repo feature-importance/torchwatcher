@@ -1,6 +1,7 @@
+import torch
 from torch import nn
 
-from torchwatcher.drawing import draw_graph
+from torchwatcher.drawing import draw_graph, draw_graph_pretty
 from torchwatcher.interjection import trace
 
 
@@ -30,3 +31,19 @@ def test_parameter_edges_use_declared_qualified_node_ids():
         for edge in edges
         for endpoint in edge
     )
+
+
+class _NestedOutput(nn.Module):
+    def forward(self, inputs):
+        return {"full": (inputs, {"slice": inputs[:, :1]})}
+
+
+def test_pretty_drawing_supports_nested_structured_outputs():
+    graph = draw_graph_pretty(
+        trace(_NestedOutput()),
+        torch.ones(1, 2),
+    )
+
+    graph_source = graph.to_string()
+    assert "(1, 2)" in graph_source
+    assert "(1, 1)" in graph_source

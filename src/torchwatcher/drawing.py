@@ -255,15 +255,25 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
         return dot_graph
 
 
-def _sanitize_shapes(meta) -> str:
+def _sanitize_shapes(meta) -> list[tuple]:
+    def collect_shapes(value):
+        if value is None:
+            return []
+        if isinstance(value, TensorMetadata):
+            return [tuple(value.shape)]
+        if isinstance(value, dict):
+            return list(chain.from_iterable(
+                collect_shapes(item) for item in value.values()
+            ))
+        if isinstance(value, (list, tuple)):
+            return list(chain.from_iterable(
+                collect_shapes(item) for item in value
+            ))
+        return []
+
     if 'tensor_meta' not in meta or meta['tensor_meta'] is None:
         return [1]
-    if isinstance(meta['tensor_meta'], dict):
-        return [tuple(v.shape) for v in meta['tensor_meta'].values()]
-    elif isinstance(meta['tensor_meta'], (list, tuple)) and not isinstance(meta['tensor_meta'], TensorMetadata):
-        return [tuple(v.shape) for v in meta['tensor_meta'] if v is not None]
-    else:
-        return [tuple(meta['tensor_meta'].shape)]
+    return collect_shapes(meta['tensor_meta'])
 
 
 class ShapeFxGraphDrawer(SubmoduleFxGraphDrawer):
