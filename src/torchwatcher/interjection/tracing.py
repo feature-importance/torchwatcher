@@ -1,5 +1,6 @@
 import copy
 import importlib
+import inspect
 from typing import Type, Optional, Dict, Any, Union, Callable
 
 import math
@@ -542,9 +543,15 @@ def trace(model: nn.Module, tracer_kwargs: Optional[Dict[str, Any]] = None) -> D
     return interject_by_match(model, None, None, tracer_kwargs=tracer_kwargs)
 
 
-def trace_shapes(model: DualGraphModule, *args):
-    """Trace the shapes of the inputs and outputs of a traced or interjected model."""
-    # TODO: deal with multiple inputs and non-tensor types
+def _bind_shape_inputs(graph_module: fx.GraphModule, args, kwargs):
+    """Bind a model call and return its inputs in FX placeholder order."""
+    bound = inspect.signature(graph_module.forward).bind(*args, **kwargs)
+    bound.apply_defaults()
+    return bound.args
+
+
+def trace_shapes(model: DualGraphModule, *args, **kwargs):
+    """Trace input and output shapes using the supplied example model call."""
     import torch._functorch.config as functorch_config
     from torch._subclasses.fake_tensor import FakeTensorMode
 
@@ -554,9 +561,11 @@ def trace_shapes(model: DualGraphModule, *args):
         with preserve_training_modes(model):
             with FakeTensorMode(allow_non_fake_inputs=True):
                 model.train_module.train()
-                ShapeProp(model.train_module).propagate(*args)
+                train_args = _bind_shape_inputs(model.train_module, args, kwargs)
+                ShapeProp(model.train_module).propagate(*train_args)
                 model.eval_module.eval()
-                ShapeProp(model.eval_module).propagate(*args)
+                eval_args = _bind_shape_inputs(model.eval_module, args, kwargs)
+                ShapeProp(model.eval_module).propagate(*eval_args)
     finally:
         functorch_config.fake_tensor_prefer_device_type = previous_device_type
 

@@ -1,4 +1,5 @@
 import hashlib
+from collections.abc import Mapping
 from itertools import chain
 from typing import Any, Optional
 from collections import Counter
@@ -439,9 +440,10 @@ def draw_graph_pretty(
         show_shapes: bool = True,
         show_node_names: bool = False,
         show_extra_info: bool = False,
+        input_kwargs: Mapping[str, Any] | None = None,
         ) -> pydot.Dot:
     if show_shapes:
-        trace_shapes(module, *inputs)
+        trace_shapes(module, *inputs, **(input_kwargs or {}))
 
     return ShapeFxGraphDrawer(module.graphmodule,
                               module.__class__.__name__,

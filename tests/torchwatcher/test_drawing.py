@@ -47,3 +47,34 @@ def test_pretty_drawing_supports_nested_structured_outputs():
     graph_source = graph.to_string()
     assert "(1, 2)" in graph_source
     assert "(1, 1)" in graph_source
+
+
+class _KeywordOnlyInput(nn.Module):
+    def forward(self, *, inputs):
+        return inputs[:, :1]
+
+
+def test_pretty_drawing_supports_keyword_only_inputs():
+    graph = draw_graph_pretty(
+        trace(_KeywordOnlyInput()),
+        input_kwargs={"inputs": torch.ones(1, 2)},
+    )
+
+    graph_source = graph.to_string()
+    assert "(1, 2)" in graph_source
+    assert "(1, 1)" in graph_source
+
+
+class _MixedInputs(nn.Module):
+    def forward(self, inputs, *, other):
+        return inputs + other
+
+
+def test_pretty_drawing_supports_mixed_positional_and_keyword_inputs():
+    graph = draw_graph_pretty(
+        trace(_MixedInputs()),
+        torch.ones(1, 2),
+        input_kwargs={"other": torch.ones(1, 2)},
+    )
+
+    assert "(1, 2)" in graph.to_string()

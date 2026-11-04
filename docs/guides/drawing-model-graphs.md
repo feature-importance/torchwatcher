@@ -30,6 +30,21 @@ with open("resnet18.svg", "wb") as f:
     f.write(graph.create_svg())
 ```
 
+For models with keyword-only or mixed positional and keyword inputs, pass the
+keyword example inputs in `input_kwargs`:
+
+```python
+graph = draw_graph_pretty(
+    traced,
+    positional_input,
+    input_kwargs={"attention_mask": attention_mask},
+)
+```
+
+The mapping is separate from the drawing options so model input names cannot
+be confused with options such as `show_shapes`. The lower-level
+`trace_shapes` helper accepts keyword inputs directly.
+
 The same drawing helpers work on models returned by `interject_by_match`,
 `interject_by_name`, `replace`, and the other graph-manipulation helpers:
 
