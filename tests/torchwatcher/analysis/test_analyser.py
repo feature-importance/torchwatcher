@@ -14,6 +14,7 @@ from torchwatcher.analysis import (
 )
 from torchwatcher.interjection import (
     interject_by_match,
+    interject_by_module_class,
     interject_by_module_class_native,
     interject_by_name,
 )
@@ -41,6 +42,34 @@ class _GradientCallCountAnalyser(Analyser):
     def process_batch_state(self, name, state, working_results):
         count = 0 if working_results is None else working_results
         return count + 1
+
+
+class _GradientBatchesAnalyser(Analyser):
+    def __init__(self):
+        super().__init__(gradient=True)
+
+    def process_batch_state(self, name, state, working_results):
+        batches = [] if working_results is None else working_results
+        batches.append({
+            "inputs": state.inputs.detach().clone(),
+            "outputs": state.outputs.detach().clone(),
+            "input_gradients": state.input_gradients.detach().clone(),
+            "output_gradients": state.output_gradients.detach().clone(),
+            "targets": (
+                state.targets.detach().clone()
+                if state._targets_set
+                else None
+            ),
+        })
+        return batches
+
+
+class _StructuredGradientAnalyser(Analyser):
+    def __init__(self):
+        super().__init__(gradient=True)
+
+    def process_batch_state(self, name, state, working_results):
+        return state.output_gradients
 
 
 class _BufferedAnalyser(_BatchSizeAnalyser):
@@ -194,6 +223,49 @@ class TestAnalyserList(unittest.TestCase):
         )
         self.assertEqual(gradient_analyser.current_states, {})
 
+    def test_gradient_child_tracks_out_of_order_backwards(self):
+        gradient_analyser = _GradientBatchesAnalyser()
+        analyser = AnalyserList(NameAnalyser(), gradient_analyser)
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        first = torch.tensor([[1.0]], requires_grad=True)
+        second = torch.tensor([[2.0]], requires_grad=True)
+
+        first_output = watched(first)
+        second_output = watched(second)
+        (first_output * 3).sum().backward()
+        (second_output * 5).sum().backward()
+
+        batches = gradient_analyser.to_dict()["0"]
+        self.assertEqual(len(batches), 2)
+        torch.testing.assert_close(batches[0]["outputs"], first.detach())
+        torch.testing.assert_close(
+            batches[0]["output_gradients"],
+            torch.tensor([[3.0]]),
+        )
+        torch.testing.assert_close(batches[1]["outputs"], second.detach())
+        torch.testing.assert_close(
+            batches[1]["output_gradients"],
+            torch.tensor([[5.0]]),
+        )
+
+    def test_gradient_child_does_not_retain_state_without_gradients(self):
+        gradient_analyser = _OutputGradientAnalyser()
+        analyser = AnalyserList(NameAnalyser(), gradient_analyser)
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+
+        watched(torch.ones(1, 2))
+
+        self.assertEqual(analyser.current_states, {})
+        self.assertEqual(gradient_analyser.current_states, {})
+
     def test_duplicate_analyser_types_have_distinct_result_prefixes(self):
         first = NameAnalyser()
         second = NameAnalyser()
@@ -299,6 +371,119 @@ class TestGradientAnalyserState(unittest.TestCase):
 
         self.assertEqual(analyser.to_dict(), {"0": 2})
         self.assertEqual(analyser.current_states, {})
+
+    def test_associates_backward_with_its_exact_forward(self):
+        analyser = _GradientBatchesAnalyser()
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        first = torch.tensor([[1.0]], requires_grad=True)
+        second = torch.tensor([[2.0]], requires_grad=True)
+
+        first_output = watched(first)
+        second_output = watched(second)
+        (first_output * 3).sum().backward()
+
+        first_batch = analyser.to_dict()["0"][0]
+        torch.testing.assert_close(first_batch["outputs"], first.detach())
+        torch.testing.assert_close(
+            first_batch["output_gradients"],
+            torch.tensor([[3.0]]),
+        )
+        self.assertEqual(len(analyser.current_states["0"]), 1)
+
+        (second_output * 5).sum().backward()
+
+        second_batch = analyser.to_dict()["0"][1]
+        torch.testing.assert_close(second_batch["outputs"], second.detach())
+        torch.testing.assert_close(
+            second_batch["output_gradients"],
+            torch.tensor([[5.0]]),
+        )
+        self.assertEqual(analyser.current_states, {})
+
+    def test_input_gradient_is_specific_to_the_watched_invocation(self):
+        class Scale(nn.Module):
+            def forward(self, inputs):
+                return inputs * 2
+
+        class WithBypass(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.scale = Scale()
+
+            def forward(self, inputs):
+                return self.scale(inputs) + inputs * 5
+
+        analyser = _GradientBatchesAnalyser()
+        watched = interject_by_module_class(WithBypass(), Scale, analyser)
+        inputs = torch.tensor([[1.0]], requires_grad=True)
+
+        watched(inputs).sum().backward()
+
+        batch = analyser.to_dict()["scale"][0]
+        torch.testing.assert_close(
+            batch["input_gradients"],
+            torch.tensor([[2.0]]),
+        )
+        torch.testing.assert_close(inputs.grad, torch.tensor([[7.0]]))
+
+    def test_reset_does_not_allow_stale_backward_to_consume_new_state(self):
+        analyser = _GradientBatchesAnalyser()
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        stale = watched(torch.tensor([[1.0]], requires_grad=True))
+        analyser.reset()
+        current = watched(torch.tensor([[2.0]], requires_grad=True))
+
+        (stale * 3).sum().backward()
+        self.assertEqual(analyser.to_dict(), {})
+        (current * 5).sum().backward()
+
+        batches = analyser.to_dict()["0"]
+        self.assertEqual(len(batches), 1)
+        torch.testing.assert_close(
+            batches[0]["outputs"],
+            torch.tensor([[2.0]]),
+        )
+        torch.testing.assert_close(
+            batches[0]["output_gradients"],
+            torch.tensor([[5.0]]),
+        )
+
+    def test_supports_structured_outputs_with_unused_tensors(self):
+        class Pair(nn.Module):
+            def forward(self, inputs):
+                return {
+                    "used": inputs * 2,
+                    "unused": inputs * 3,
+                }
+
+        class UsesPair(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.pair = Pair()
+
+            def forward(self, inputs):
+                return self.pair(inputs)["used"]
+
+        analyser = _StructuredGradientAnalyser()
+        watched = interject_by_module_class(UsesPair(), Pair, analyser)
+        inputs = torch.tensor([[1.0]], requires_grad=True)
+
+        (watched(inputs) * 4).sum().backward()
+
+        gradients = analyser.to_dict()["pair"]
+        torch.testing.assert_close(
+            gradients["used"],
+            torch.tensor([[4.0]]),
+        )
+        self.assertIsNone(gradients["unused"])
 
 
 class TestPerClassAnalyser(unittest.TestCase):
@@ -418,6 +603,71 @@ class TestPerClassAnalyser(unittest.TestCase):
         torch.testing.assert_close(
             analyser.to_dict()[1]["add"],
             weights[[1]],
+        )
+
+    def test_gradient_batches_retain_their_own_targets_and_masks(self):
+        analyser = PerClassAnalyser(_GradientBatchesAnalyser())
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        first = torch.ones(2, 1, requires_grad=True)
+        second = torch.ones(2, 1, requires_grad=True)
+        first_weights = torch.tensor([[1.0], [2.0]])
+        second_weights = torch.tensor([[3.0], [4.0]])
+
+        analyser.targets = torch.tensor([0, 1])
+        first_output = watched(first)
+        analyser.targets = torch.tensor([1, 0])
+        second_output = watched(second)
+        (
+            (first_output * first_weights).sum()
+            + (second_output * second_weights).sum()
+        ).backward()
+
+        result = analyser.to_dict()
+        class_zero_gradients = sorted(
+            tuple(batch["output_gradients"].flatten().tolist())
+            for batch in result[0]["0"]
+        )
+        class_one_gradients = sorted(
+            tuple(batch["output_gradients"].flatten().tolist())
+            for batch in result[1]["0"]
+        )
+        self.assertEqual(class_zero_gradients, [(1.0,), (4.0,)])
+        self.assertEqual(class_one_gradients, [(2.0,), (3.0,)])
+        for class_value, class_result in result.items():
+            for batch in class_result["0"]:
+                torch.testing.assert_close(
+                    batch["targets"],
+                    torch.full_like(batch["targets"], class_value),
+                )
+
+    def test_versus_gradient_batches_retain_their_own_complements(self):
+        analyser = PerClassVersusAnalyser(_GradientBatchesAnalyser())
+        watched = interject_by_name(
+            nn.Sequential(nn.Identity()),
+            "0",
+            analyser,
+        )
+        first = torch.ones(2, 1, requires_grad=True)
+        second = torch.ones(3, 1, requires_grad=True)
+
+        analyser.targets = torch.tensor([0, 1])
+        first_output = watched(first)
+        analyser.targets = torch.tensor([0, 0, 1])
+        second_output = watched(second)
+        (first_output.sum() + second_output.sum()).backward()
+
+        result = analyser.to_dict()
+        self.assertEqual(
+            sorted(batch["outputs"].shape[0] for batch in result[0]["0"]),
+            [1, 2],
+        )
+        self.assertEqual(
+            sorted(batch["outputs"].shape[0] for batch in result["~0"]["0"]),
+            [1, 1],
         )
 
     def test_versus_reuses_scalar_class_keys_across_batches(self):

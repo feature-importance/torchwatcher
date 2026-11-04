@@ -7,10 +7,10 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+from torch.utils import _pytree
 from torch.utils.data import DataLoader
 
-from torchwatcher.interjection import WrappedForwardBackwardInterjection, \
-    WrappedForwardInterjection
+from torchwatcher.interjection import WrappedForwardInterjection
 from torchwatcher.utils import preserve_training_modes
 
 
@@ -98,7 +98,61 @@ class FInter(WrappedForwardInterjection):
             analyser.log_forward(name, module, inputs, outputs)
 
 
-class FBInter(WrappedForwardBackwardInterjection):
+@dataclass(frozen=True)
+class _AnalyserInvocation:
+    name: str
+    sequence: int
+
+
+class _GradientTree:
+    """Track gradient-bearing tensor leaves in an arbitrary pytree."""
+
+    def __init__(self, spec, leaf_count, positions, tensors):
+        self.spec = spec
+        self.leaf_count = leaf_count
+        self.positions = positions
+        self.tensors = tensors
+
+    def rebuild(self, gradients):
+        leaves = [None] * self.leaf_count
+        for position, gradient in zip(self.positions, gradients):
+            leaves[position] = gradient
+        return _pytree.tree_unflatten(leaves, self.spec)
+
+
+def _with_gradient_boundaries(value):
+    """Return a pytree whose differentiable tensors have unique view edges."""
+    leaves, spec = _pytree.tree_flatten(value)
+    bounded = list(leaves)
+    positions = []
+    tensors = []
+    if torch.is_grad_enabled():
+        for index, leaf in enumerate(leaves):
+            if isinstance(leaf, torch.Tensor) and leaf.requires_grad:
+                boundary = leaf.view_as(leaf)
+                bounded[index] = boundary
+                positions.append(index)
+                tensors.append(boundary)
+    return (
+        _pytree.tree_unflatten(bounded, spec),
+        _GradientTree(spec, len(leaves), positions, tensors),
+    )
+
+
+def _gradient_tree(value):
+    leaves, spec = _pytree.tree_flatten(value)
+    positions = []
+    tensors = []
+    for index, leaf in enumerate(leaves):
+        if isinstance(leaf, torch.Tensor) and leaf.requires_grad:
+            positions.append(index)
+            tensors.append(leaf)
+    return _GradientTree(spec, len(leaves), positions, tensors)
+
+
+class FBInter(WrappedForwardInterjection):
+    """Observe gradients for the exact forward invocation which produced them."""
+
     def __init__(self, analyser):
         super().__init__()
         # store the ref to the inter in a tuple to stop it being registered
@@ -106,14 +160,78 @@ class FBInter(WrappedForwardBackwardInterjection):
         self._analyser = (analyser,)
 
     def process(self, name, module, inputs, outputs):
+        # Keep direct/manual processing compatible. Invocation-aware gradient
+        # observation is installed by ``forward`` below.
         analyser = self._analyser[0]
         if analyser.enabled:
-            analyser.log_forward(name, module, inputs, outputs)
+            return analyser.log_forward(name, module, inputs, outputs)
 
-    def process_backward(self, name, module, grad_input, grad_output):
+    def forward(
+            self,
+            name,
+            *args,
+            _torchwatcher_training: bool | None = None,
+            **kwargs):
+        key = self._registered_key(name, _torchwatcher_training)
         analyser = self._analyser[0]
-        if analyser.enabled:
-            analyser.log_backward(name, module, grad_input, grad_output)
+        if not analyser.enabled:
+            return self._wrapped[key](*args, **kwargs)
+
+        (bounded_args, bounded_kwargs), input_tree = \
+            _with_gradient_boundaries((args, kwargs))
+        outputs = self._wrapped[key](*bounded_args, **bounded_kwargs)
+
+        if not analyser.enabled:
+            return outputs
+
+        invocation = analyser.log_forward(
+            name,
+            self._original_modules[key],
+            args[0] if len(args) == 1 else args,
+            outputs,
+        )
+        if invocation is None:
+            return outputs
+
+        output_tree = _gradient_tree(outputs)
+        if not output_tree.tensors:
+            analyser._discard_current_state(invocation)
+            return outputs
+
+        input_count = len(input_tree.tensors)
+        observed_tensors = input_tree.tensors + output_tree.tensors
+        hook = {}
+
+        def complete(gradients):
+            try:
+                input_gradients, _ = input_tree.rebuild(
+                    gradients[:input_count]
+                )
+                input_gradients = (
+                    input_gradients[0]
+                    if len(input_gradients) == 1
+                    else input_gradients
+                )
+                output_gradients = output_tree.rebuild(
+                    gradients[input_count:]
+                )
+                analyser.log_backward(
+                    invocation,
+                    input_gradients,
+                    output_gradients,
+                )
+            finally:
+                hook["handle"].remove()
+
+        try:
+            hook["handle"] = torch.autograd.graph.register_multi_grad_hook(
+                observed_tensors,
+                complete,
+            )
+        except Exception:
+            analyser._discard_current_state(invocation)
+            raise
+        return outputs
 
 
 class Analyser[T](WrappedForwardInterjection):
@@ -122,7 +240,8 @@ class Analyser[T](WrappedForwardInterjection):
     def __init__(self, gradient=False):
         super().__init__()
 
-        self.current_states: dict[str, list[AnalyserState]] = {}
+        self.current_states: dict[str, dict[int, Any]] = {}
+        self._next_invocation = 0
         self.working_results: dict[str, Any] = {}
 
         self.gradient = gradient
@@ -309,11 +428,13 @@ class Analyser[T](WrappedForwardInterjection):
             self,
             name,
             *args,
-            _torchwatcher_training: bool | None = None):
+            _torchwatcher_training: bool | None = None,
+            **kwargs):
         return self.interjection(
             name,
             *args,
             _torchwatcher_training=_torchwatcher_training,
+            **kwargs,
         )
 
     def register(self,
@@ -359,17 +480,12 @@ class Analyser[T](WrappedForwardInterjection):
             s._targets = self._targets
             s._targets_set = True
 
-        self.current_states.setdefault(name, []).append(s)
-        if not self.gradient:
-            self._pop_current_state(name)
-            self.finalize_state(s)
+        if self.gradient:
+            return self._store_current_state(name, s)
+        self.finalize_state(s)
 
-    def log_backward(self, name, _, grad_input, grad_output):
-        if not self.enabled:
-            self.current_states.pop(name, None)
-            return
-
-        s = self._pop_current_state(name)
+    def log_backward(self, invocation, grad_input, grad_output):
+        s = self._pop_current_state(invocation)
         if s is None:
             return
 
@@ -380,15 +496,24 @@ class Analyser[T](WrappedForwardInterjection):
 
         self.finalize_state(s)
 
-    def _pop_current_state(self, name: str) -> AnalyserState | None:
-        states = self.current_states.get(name)
+    def _store_current_state(self, name: str, state: Any) -> _AnalyserInvocation:
+        invocation = _AnalyserInvocation(name, self._next_invocation)
+        self._next_invocation += 1
+        self.current_states.setdefault(name, {})[invocation.sequence] = state
+        return invocation
+
+    def _pop_current_state(self, invocation: _AnalyserInvocation) -> Any | None:
+        states = self.current_states.get(invocation.name)
         if not states:
             return None
 
-        state = states.pop()
+        state = states.pop(invocation.sequence, None)
         if not states:
-            del self.current_states[name]
+            del self.current_states[invocation.name]
         return state
+
+    def _discard_current_state(self, invocation: _AnalyserInvocation):
+        self._pop_current_state(invocation)
 
     @property
     def targets(self):
@@ -755,27 +880,44 @@ class AnalyserList(Analyser[Any]):
     """Wraps multiple analysers into a single analyser."""
 
     def __init__(self, *args: Analyser):
-        # The list itself handles forward dispatch. Gradient children register
-        # their own backward hooks, and we don't want to register them twice,
-        # so gradient is False here.
-        super().__init__(gradient=False)
+        super().__init__(gradient=any(analyser.gradient for analyser in args))
         self.analysers = nn.ModuleList(args)
 
-        # but we then set it here if required to call the right hooks.
-        self.gradient = any(analyser.gradient for analyser in self.analysers)
-
     def log_forward(self, name, module, inputs, outputs):
+        pending = []
         for analyser in self.analysers:
-            # just do this here rather than changing the setter. Don't think
-            # it will cause problems.
             if self._targets_set:
                 analyser.targets = self.targets
 
-            analyser.log_forward(name, module, inputs, outputs)
+            invocation = analyser.log_forward(name, module, inputs, outputs)
+            if invocation is not None:
+                pending.append((analyser, invocation))
 
-    def log_backward(self, name, module, grad_input, grad_output):
-        for analyser in self.analysers:
-            analyser.log_backward(name, module, grad_input, grad_output)
+        if pending:
+            return self._store_current_state(name, pending)
+
+    def log_backward(self, invocation, grad_input, grad_output):
+        pending = self._pop_current_state(invocation)
+        if pending is None:
+            return
+        for index, (analyser, child_invocation) in enumerate(pending):
+            try:
+                analyser.log_backward(
+                    child_invocation,
+                    grad_input,
+                    grad_output,
+                )
+            except Exception:
+                for child, remaining in pending[index:]:
+                    child._discard_current_state(remaining)
+                raise
+
+    def _discard_current_state(self, invocation):
+        pending = self._pop_current_state(invocation)
+        if pending is None:
+            return
+        for analyser, child_invocation in pending:
+            analyser._discard_current_state(child_invocation)
 
     def process_batch_state(self,
                             name: str,
@@ -819,12 +961,16 @@ class AnalyserList(Analyser[Any]):
     def register(self, name, module):
         super().register(name, module)
         for analyser in self.analysers:
-            analyser.register(name, module)
+            with analyser._registration_callbacks_only(
+                    getattr(self, "_registration_training", None)):
+                analyser.register(name, module)
 
     def register_original_module(self, name, module):
         super().register_original_module(name, module)
         for analyser in self.analysers:
-            analyser.register_original_module(name, module)
+            with analyser._registration_callbacks_only(
+                    getattr(self, "_registration_training", None)):
+                analyser.register_original_module(name, module)
 
     def reset(self):
         super().reset()
@@ -931,6 +1077,7 @@ class PerClassAnalyser(Analyser[Any]):
             return
 
         classes = self.targets
+        pending = []
 
         for c in classes.unique():
             if isinstance(c, torch.Tensor) and c.numel() == 1:
@@ -940,26 +1087,42 @@ class PerClassAnalyser(Analyser[Any]):
                 self._create_class_analyser(c)
 
             analyser = self.analysers[c]
-            analyser.targets = self.targets[classes == c]
-            analyser.log_forward(name,
-                                 module,
-                                 _select_batch(inputs, classes == c),
-                                 _select_batch(outputs, classes == c))
+            class_mask = classes == c
+            analyser.targets = self.targets[class_mask]
+            invocation = analyser.log_forward(
+                name,
+                module,
+                _select_batch(inputs, class_mask),
+                _select_batch(outputs, class_mask),
+            )
+            if invocation is not None:
+                pending.append((analyser, invocation, class_mask))
 
-    def log_backward(self, name, module, grad_input, grad_output):
-        if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):
+        if pending:
+            return self._store_current_state(name, pending)
+
+    def log_backward(self, invocation, grad_input, grad_output):
+        pending = self._pop_current_state(invocation)
+        if pending is None:
             return
-
-        classes = self.targets
-
-        for c, analyser in self.analysers.items():
-            if torch.any(classes == c):  # only call if there is data in this batch for this class
+        for index, (analyser, child_invocation, class_mask) in enumerate(pending):
+            try:
                 analyser.log_backward(
-                    name,
-                    module,
-                    _select_batch(grad_input, classes == c),
-                    _select_batch(grad_output, classes == c),
+                    child_invocation,
+                    _select_batch(grad_input, class_mask),
+                    _select_batch(grad_output, class_mask),
                 )
+            except Exception:
+                for child, remaining, _ in pending[index:]:
+                    child._discard_current_state(remaining)
+                raise
+
+    def _discard_current_state(self, invocation):
+        pending = self._pop_current_state(invocation)
+        if pending is None:
+            return
+        for analyser, child_invocation, _ in pending:
+            analyser._discard_current_state(child_invocation)
 
     def process_batch_state(self,
                             name: str,
@@ -989,6 +1152,7 @@ class PerClassVersusAnalyser(PerClassAnalyser):
             return
 
         classes = self.targets
+        pending = []
 
         for class_value in classes.unique():
             c = class_value.cpu().item() if class_value.numel() == 1 else class_value
@@ -1002,47 +1166,47 @@ class PerClassVersusAnalyser(PerClassAnalyser):
 
             analyser = self.analysers[c]
             analyser.targets = self.targets[class_mask]
-            analyser.log_forward(
+            invocation = analyser.log_forward(
                 name,
                 module,
                 _select_batch(inputs, class_mask),
                 _select_batch(outputs, class_mask),
             )
+            if invocation is not None:
+                pending.append((analyser, invocation, class_mask))
 
             if torch.any(complement_mask):
                 analyser = self.analysers[complement_key]
                 analyser.targets = self.targets[complement_mask]
-                analyser.log_forward(
+                invocation = analyser.log_forward(
                     name,
                     module,
                     _select_batch(inputs, complement_mask),
                     _select_batch(outputs, complement_mask),
                 )
+                if invocation is not None:
+                    pending.append(
+                        (analyser, invocation, complement_mask)
+                    )
 
-    def log_backward(self, name, module, grad_input, grad_output):
-        if not self._targets_set or torch._subclasses.fake_tensor.is_fake(self.targets):
+        if pending:
+            return self._store_current_state(name, pending)
+
+    def log_backward(self, invocation, grad_input, grad_output):
+        pending = self._pop_current_state(invocation)
+        if pending is None:
             return
-        
-        classes = self.targets
-
-        for class_value in classes.unique():
-            c = class_value.cpu().item() if class_value.numel() == 1 else class_value
-            class_mask = classes == class_value
-            complement_mask = ~class_mask
-
-            self.analysers[c].log_backward(
-                name,
-                module,
-                _select_batch(grad_input, class_mask),
-                _select_batch(grad_output, class_mask),
-            )
-            if torch.any(complement_mask):
-                self.analysers[f"~{c}"].log_backward(
-                    name,
-                    module,
-                    _select_batch(grad_input, complement_mask),
-                    _select_batch(grad_output, complement_mask),
+        for index, (analyser, child_invocation, mask) in enumerate(pending):
+            try:
+                analyser.log_backward(
+                    child_invocation,
+                    _select_batch(grad_input, mask),
+                    _select_batch(grad_output, mask),
                 )
+            except Exception:
+                for child, remaining, _ in pending[index:]:
+                    child._discard_current_state(remaining)
+                raise
 
 
 class NameAnalyser(Analyser[str]):
