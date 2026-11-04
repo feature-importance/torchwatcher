@@ -22,10 +22,12 @@ class FeatureStatistics(Analyser[_FeatureStatistics]):
     def process_batch_state(self, name: str, state: AnalyserState,
                             working_results: _FeatureStatistics | None) \
             -> _FeatureStatistics:
-        features = state.outputs
+        features = state.outputs.detach()
+        if features.dtype in {torch.float16, torch.bfloat16}:
+            features = features.float()
 
         with torch.no_grad():
-            channel_features = features.detach().reshape(
+            channel_features = features.reshape(
                 features.shape[0],
                 features.shape[1],
                 -1,
