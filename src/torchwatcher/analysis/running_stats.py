@@ -55,6 +55,14 @@ import torch
 from torch.utils.data.sampler import Sampler
 
 
+def _to_numpy(value):
+    return None if value is None else value.cpu().numpy()
+
+
+def _from_numpy(value):
+    return None if value is None else torch.from_numpy(value)
+
+
 def tally(stat, dataset, cache=None, quiet=False, **kwargs):
     """To use tally, write code like the following.
 
@@ -261,7 +269,7 @@ class Mean(Stat):
     def load_state_dict(self, state):
         self.count = state["count"]
         self.batchcount = state["batchcount"]
-        self._mean = torch.from_numpy(state["mean"])
+        self._mean = _from_numpy(state["mean"])
         self.data_shape = (
             None if state["data_shape"] is None else tuple(state["data_shape"])
         )
@@ -272,7 +280,7 @@ class Mean(Stat):
             count=self.count,
             data_shape=self.data_shape and tuple(self.data_shape),
             batchcount=self.batchcount,
-            mean=self._mean.cpu().numpy(),
+            mean=_to_numpy(self._mean),
         )
 
 
@@ -352,8 +360,8 @@ class Variance(Stat):
     def load_state_dict(self, state):
         self.count = state["count"]
         self.batchcount = state["batchcount"]
-        self._mean = torch.from_numpy(state["mean"])
-        self.v_cmom2 = torch.from_numpy(state["cmom2"])
+        self._mean = _from_numpy(state["mean"])
+        self.v_cmom2 = _from_numpy(state["cmom2"])
         self.data_shape = (
             None if state["data_shape"] is None else tuple(state["data_shape"])
         )
@@ -364,8 +372,8 @@ class Variance(Stat):
             count=self.count,
             data_shape=self.data_shape and tuple(self.data_shape),
             batchcount=self.batchcount,
-            mean=self._mean.cpu().numpy(),
-            cmom2=self.v_cmom2.cpu().numpy(),
+            mean=_to_numpy(self._mean),
+            cmom2=_to_numpy(self.v_cmom2),
         )
 
 
@@ -440,14 +448,14 @@ class Covariance(Stat):
             constructor=self.__module__ + "." + self.__class__.__name__ + "()",
             count=self.count,
             data_shape=self.data_shape and tuple(self.data_shape),
-            mean=self._mean.cpu().numpy(),
-            cmom2=self.cmom2.cpu().numpy(),
+            mean=_to_numpy(self._mean),
+            cmom2=_to_numpy(self.cmom2),
         )
 
     def load_state_dict(self, state):
         self.count = state["count"]
-        self._mean = torch.from_numpy(state["mean"])
-        self.cmom2 = torch.from_numpy(state["cmom2"])
+        self._mean = _from_numpy(state["mean"])
+        self.cmom2 = _from_numpy(state["cmom2"])
         self.data_shape = (
             None if state["data_shape"] is None else tuple(state["data_shape"])
         )
@@ -491,12 +499,12 @@ class SecondMoment(Stat):
         return dict(
             constructor=self.__module__ + "." + self.__class__.__name__ + "()",
             count=self.count,
-            mom2=self.mom2.cpu().numpy(),
+            mom2=_to_numpy(self.mom2),
         )
 
     def load_state_dict(self, state):
         self.count = int(state["count"])
-        self.mom2 = torch.from_numpy(state["mom2"])
+        self.mom2 = _from_numpy(state["mom2"])
 
 
 class Bincount(Stat):
@@ -540,12 +548,12 @@ class Bincount(Stat):
         return dict(
             constructor=self.__module__ + "." + self.__class__.__name__ + "()",
             count=self.count,
-            bincount=self._bincount.cpu().numpy(),
+            bincount=_to_numpy(self._bincount),
         )
 
     def load_state_dict(self, dic):
         self.count = int(dic["count"])
-        self._bincount = torch.from_numpy(dic["bincount"])
+        self._bincount = _from_numpy(dic["bincount"])
 
 
 class CrossCovariance(Stat):
@@ -630,18 +638,26 @@ class CrossCovariance(Stat):
         return dict(
             constructor=self.__module__ + "." + self.__class__.__name__ + "()",
             count=self.count,
-            mean_a=self._mean[0].cpu().numpy(),
-            mean_b=self._mean[1].cpu().numpy(),
-            cmom2_a=self.v_cmom2[0].cpu().numpy(),
-            cmom2_b=self.v_cmom2[1].cpu().numpy(),
-            cmom2=self.cmom2.cpu().numpy(),
+            mean_a=_to_numpy(None if self._mean is None else self._mean[0]),
+            mean_b=_to_numpy(None if self._mean is None else self._mean[1]),
+            cmom2_a=_to_numpy(None if self.v_cmom2 is None else self.v_cmom2[0]),
+            cmom2_b=_to_numpy(None if self.v_cmom2 is None else self.v_cmom2[1]),
+            cmom2=_to_numpy(self.cmom2),
         )
 
     def load_state_dict(self, state):
         self.count = int(state["count"])
-        self._mean = [torch.from_numpy(state[f"mean_{k}"]) for k in "ab"]
-        self.v_cmom2 = [torch.from_numpy(state[f"cmom2_{k}"]) for k in "ab"]
-        self.cmom2 = torch.from_numpy(state["cmom2"])
+        self._mean = (
+            None
+            if state["mean_a"] is None
+            else [_from_numpy(state[f"mean_{k}"]) for k in "ab"]
+        )
+        self.v_cmom2 = (
+            None
+            if state["cmom2_a"] is None
+            else [_from_numpy(state[f"cmom2_{k}"]) for k in "ab"]
+        )
+        self.cmom2 = _from_numpy(state["cmom2"])
 
 
 def _float_from_bool(a):
@@ -699,12 +715,12 @@ class IoU(Stat):
         return dict(
             constructor=self.__module__ + "." + self.__class__.__name__ + "()",
             count=self.count,
-            intersection=self._intersection.cpu().numpy(),
+            intersection=_to_numpy(self._intersection),
         )
 
     def load_state_dict(self, state):
         self.count = int(state["count"])
-        self._intersection = torch.tensor(state["intersection"])
+        self._intersection = _from_numpy(state["intersection"])
 
 
 class CrossIoU(Stat):
@@ -758,16 +774,16 @@ class CrossIoU(Stat):
         return dict(
             constructor=self.__module__ + "." + self.__class__.__name__ + "()",
             count=self.count,
-            total_a=self.total_a.cpu().numpy(),
-            total_b=self.total_b.cpu().numpy(),
-            intersection=self._intersection.cpu().numpy(),
+            total_a=_to_numpy(self.total_a),
+            total_b=_to_numpy(self.total_b),
+            intersection=_to_numpy(self._intersection),
         )
 
     def load_state_dict(self, state):
         self.count = int(state["count"])
-        self.total_a = torch.tensor(state["total_a"])
-        self.total_b = torch.tensor(state["total_b"])
-        self._intersection = torch.tensor(state["intersection"])
+        self.total_a = _from_numpy(state["total_a"])
+        self.total_b = _from_numpy(state["total_b"])
+        self._intersection = _from_numpy(state["intersection"])
 
 
 class Quantile(Stat):

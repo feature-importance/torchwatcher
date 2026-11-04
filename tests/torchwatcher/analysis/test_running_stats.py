@@ -1,6 +1,38 @@
+import pytest
 import torch
 
-from torchwatcher.analysis import CrossCovariance, Variance
+from torchwatcher.analysis import (
+    Bincount,
+    Covariance,
+    CrossCovariance,
+    CrossIoU,
+    IoU,
+    Mean,
+    SecondMoment,
+    Variance,
+)
+
+
+@pytest.mark.parametrize(
+    "statistic_type",
+    [
+        Mean,
+        Variance,
+        Covariance,
+        SecondMoment,
+        Bincount,
+        CrossCovariance,
+        IoU,
+        CrossIoU,
+    ],
+)
+def test_empty_statistic_state_round_trips(statistic_type):
+    statistic = statistic_type()
+
+    state = statistic.state_dict()
+    restored = statistic_type(state=state)
+
+    assert restored.state_dict() == state
 
 
 def test_variance_matches_torch_across_uneven_batches():
