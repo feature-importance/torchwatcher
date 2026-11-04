@@ -72,6 +72,22 @@ class _StructuredGradientAnalyser(Analyser):
         return state.output_gradients
 
 
+class _InputAnalyser(Analyser):
+    def process_batch_state(self, name, state, working_results):
+        return state.inputs
+
+
+class _StructuredInputGradientAnalyser(Analyser):
+    def __init__(self):
+        super().__init__(gradient=True)
+
+    def process_batch_state(self, name, state, working_results):
+        return {
+            "inputs": state.inputs,
+            "input_gradients": state.input_gradients,
+        }
+
+
 class _BufferedAnalyser(_BatchSizeAnalyser):
     def __init__(self):
         super().__init__()
@@ -334,6 +350,71 @@ class TestAnalyserEnablement(unittest.TestCase):
 
 
 class TestGradientAnalyserState(unittest.TestCase):
+    def test_native_forward_analyser_records_keyword_inputs(self):
+        class KeywordScale(nn.Module):
+            def forward(self, *, inputs):
+                return inputs * 2
+
+        class Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.scale = KeywordScale()
+
+            def forward(self, inputs):
+                return self.scale(inputs=inputs)
+
+        analyser = _InputAnalyser()
+        watched = interject_by_module_class_native(
+            Model(),
+            KeywordScale,
+            analyser,
+        )
+        inputs = torch.tensor([1.0])
+
+        watched(inputs)
+
+        recorded = analyser.to_dict()["scale"]
+        self.assertEqual(set(recorded), {"inputs"})
+        torch.testing.assert_close(recorded["inputs"], inputs)
+
+    def test_native_gradient_analyser_records_mixed_call_inputs(self):
+        class MixedAdd(nn.Module):
+            def forward(self, left, *, right):
+                return left + 2 * right
+
+        class Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.add = MixedAdd()
+
+            def forward(self, left, right):
+                return self.add(left, right=right)
+
+        analyser = _StructuredInputGradientAnalyser()
+        watched = interject_by_module_class_native(
+            Model(),
+            MixedAdd,
+            analyser,
+        )
+        left = torch.tensor([1.0], requires_grad=True)
+        right = torch.tensor([2.0], requires_grad=True)
+
+        watched(left, right).sum().backward()
+
+        recorded = analyser.to_dict()["add"]
+        positional, keyword = recorded["inputs"]
+        positional_gradients, keyword_gradients = recorded["input_gradients"]
+        torch.testing.assert_close(positional, left)
+        torch.testing.assert_close(keyword["right"], right)
+        torch.testing.assert_close(
+            positional_gradients,
+            torch.ones_like(left),
+        )
+        torch.testing.assert_close(
+            keyword_gradients["right"],
+            torch.full_like(right, 2),
+        )
+
     def test_records_repeated_native_module_calls(self):
         class ReusedModule(nn.Module):
             def __init__(self):

@@ -129,6 +129,11 @@ gradients). If the interjection was wrapping an underlying `nn.Module` instance,
 a reference to that instance is also passed along (this will be `None` if a
 different type of node in the compute graph was wrapped).
 
+For calls made entirely with positional arguments, `inputs` keeps the existing
+single-value or tuple representation. Keyword-only calls provide a dictionary;
+calls containing both forms provide `(positional_inputs, keyword_inputs)`.
+Input gradients use the same structure.
+
 ## Adding interjections to the graph
 
 ## Inserting by matching a module

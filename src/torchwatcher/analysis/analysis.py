@@ -11,7 +11,7 @@ from torch.utils import _pytree
 from torch.utils.data import DataLoader
 
 from torchwatcher.interjection import WrappedForwardInterjection
-from torchwatcher.utils import preserve_training_modes
+from torchwatcher.utils import preserve_training_modes, unpack_call
 
 
 class TargetException(Exception):
@@ -187,7 +187,7 @@ class FBInter(WrappedForwardInterjection):
         invocation = analyser.log_forward(
             name,
             self._original_modules[key],
-            args[0] if len(args) == 1 else args,
+            unpack_call(args, kwargs),
             outputs,
         )
         if invocation is None:
@@ -204,13 +204,12 @@ class FBInter(WrappedForwardInterjection):
 
         def complete(gradients):
             try:
-                input_gradients, _ = input_tree.rebuild(
+                input_gradient_args, input_gradient_kwargs = input_tree.rebuild(
                     gradients[:input_count]
                 )
-                input_gradients = (
-                    input_gradients[0]
-                    if len(input_gradients) == 1
-                    else input_gradients
+                input_gradients = unpack_call(
+                    input_gradient_args,
+                    input_gradient_kwargs,
                 )
                 output_gradients = output_tree.rebuild(
                     gradients[input_count:]

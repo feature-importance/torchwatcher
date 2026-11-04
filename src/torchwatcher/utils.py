@@ -77,6 +77,18 @@ def unpack(result):
                          len(result) == 1) else result
 
 
+def unpack_call(args, kwargs):
+    """Represent positional and keyword call inputs without changing the
+    existing positional-only convention.
+    """
+    positional = unpack(args)
+    if not kwargs:
+        return positional
+    if not args:
+        return kwargs
+    return positional, kwargs
+
+
 def pack(result):
     """packs an item into a single-item tuple unless it's already a tuple"""
     if isinstance(result, collections.abc.Sequence):

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.utils.hooks import RemovableHandle
 
-from torchwatcher.utils import unpack
+from torchwatcher.utils import unpack, unpack_call
 
 
 class Interjection(nn.Module, metaclass=abc.ABCMeta):
@@ -154,7 +154,7 @@ class WrappedForwardInterjection(Interjection):
         processed = self.process(
             name,
             self._original_modules[key],
-            unpack(args),
+            unpack_call(args, kwargs),
             y,
         )
         return y if processed is None else processed
