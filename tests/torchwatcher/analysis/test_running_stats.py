@@ -8,23 +8,31 @@ from torchwatcher.analysis import (
     CrossIoU,
     IoU,
     Mean,
+    Quantile,
     SecondMoment,
+    Stat,
+    TopK,
     Variance,
 )
 
 
+EMPTY_STATISTIC_TYPES = [
+    Mean,
+    Variance,
+    Covariance,
+    SecondMoment,
+    Bincount,
+    CrossCovariance,
+    IoU,
+    CrossIoU,
+    Quantile,
+    TopK,
+]
+
+
 @pytest.mark.parametrize(
     "statistic_type",
-    [
-        Mean,
-        Variance,
-        Covariance,
-        SecondMoment,
-        Bincount,
-        CrossCovariance,
-        IoU,
-        CrossIoU,
-    ],
+    EMPTY_STATISTIC_TYPES,
 )
 def test_empty_statistic_state_round_trips(statistic_type):
     statistic = statistic_type()
@@ -33,6 +41,48 @@ def test_empty_statistic_state_round_trips(statistic_type):
     restored = statistic_type(state=state)
 
     assert restored.state_dict() == state
+
+
+@pytest.mark.parametrize("statistic_type", EMPTY_STATISTIC_TYPES)
+def test_empty_statistic_moves_to_cpu(statistic_type):
+    statistic_type().cpu_()
+
+
+@pytest.mark.parametrize("statistic_type", EMPTY_STATISTIC_TYPES)
+def test_empty_statistic_file_round_trips(statistic_type, tmp_path):
+    path = tmp_path / "statistic.npz"
+    statistic = statistic_type()
+
+    statistic.save(path)
+    restored = statistic_type()
+    restored.load(path)
+
+    assert restored.state_dict() == statistic.state_dict()
+
+
+def test_topk_is_a_stat_and_initialized_state_round_trips():
+    statistic = TopK(k=2)
+    statistic.add(torch.tensor([3.0, 1.0, 2.0]))
+
+    restored = TopK(state=statistic.state_dict())
+
+    assert isinstance(restored, Stat)
+    expected_values, expected_indices = statistic.topk()
+    actual_values, actual_indices = restored.topk()
+    torch.testing.assert_close(actual_values, expected_values)
+    torch.testing.assert_close(actual_indices, expected_indices)
+
+
+def test_initialized_quantile_state_round_trips():
+    statistic = Quantile(r=8)
+    statistic.add(torch.arange(12.0).reshape(6, 2))
+
+    restored = Quantile(state=statistic.state_dict())
+
+    torch.testing.assert_close(
+        restored.quantiles([0.25, 0.5, 0.75]),
+        statistic.quantiles([0.25, 0.5, 0.75]),
+    )
 
 
 def test_variance_matches_torch_across_uneven_batches():

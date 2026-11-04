@@ -536,7 +536,8 @@ class Bincount(Stat):
             self.count += size
 
     def to_(self, device):
-        self._bincount = self._bincount.to(device)
+        if self._bincount is not None:
+            self._bincount = self._bincount.to(device)
 
     def size(self):
         return self.count
@@ -630,9 +631,12 @@ class CrossCovariance(Stat):
         return cor
 
     def to_(self, device):
-        self._mean = [m.to(device) for m in self._mean]
-        self.v_cmom2 = [vcs.to(device) for vcs in self.v_cmom2]
-        self.cmom2 = self.cmom2.to(device)
+        if self._mean is not None:
+            self._mean = [m.to(device) for m in self._mean]
+        if self.v_cmom2 is not None:
+            self.v_cmom2 = [vcs.to(device) for vcs in self.v_cmom2]
+        if self.cmom2 is not None:
+            self.cmom2 = self.cmom2.to(device)
 
     def state_dict(self):
         return dict(
@@ -709,7 +713,8 @@ class IoU(Stat):
         return self.intersection() / (self.union() + 1e-20)
 
     def to_(self, _device):
-        self._intersection = self._intersection.to(_device)
+        if self._intersection is not None:
+            self._intersection = self._intersection.to(_device)
 
     def state_dict(self):
         return dict(
@@ -766,9 +771,12 @@ class CrossIoU(Stat):
         return self.intersection() / (self.union() + 1e-20)
 
     def to_(self, _device):
-        self.total_a = self.total_a.to(_device)
-        self.total_b = self.total_b.to(_device)
-        self._intersection = self._intersection.to(_device)
+        if self.total_a is not None:
+            self.total_a = self.total_a.to(_device)
+        if self.total_b is not None:
+            self.total_b = self.total_b.to(_device)
+        if self._intersection is not None:
+            self._intersection = self._intersection.to(_device)
 
     def state_dict(self):
         return dict(
@@ -846,6 +854,8 @@ class Quantile(Stat):
 
     def to_(self, device):
         """Switches internal storage to specified device."""
+        if self.data is None:
+            return
         if device != self.device:
             old_data = self.data
             old_extremes = self.extremes
@@ -951,22 +961,43 @@ class Quantile(Stat):
             depth=self.depth,
             buffersize=self.buffersize,
             samplerate=self.samplerate,
-            sizes=numpy.array([d.shape[1] for d in self.data]),
-            extremes=self.extremes.cpu().detach().numpy(),
+            sizes=(
+                None
+                if self.data is None
+                else numpy.array([d.shape[1] for d in self.data])
+            ),
+            extremes=(
+                None
+                if self.extremes is None
+                else self.extremes.cpu().detach().numpy()
+            ),
             size=self.count,
             batchcount=self.batchcount,
         )
-        for i, (d, f) in enumerate(zip(self.data, self.firstfree)):
-            state[f"data.{i}"] = d.cpu().detach().numpy()[:, :f].T
+        if self.data is not None:
+            for i, (d, f) in enumerate(zip(self.data, self.firstfree)):
+                state[f"data.{i}"] = d.cpu().detach().numpy()[:, :f].T
         return state
 
     def load_state_dict(self, state):
         self.resolution = int(state["resolution"])
         self.randbits = torch.ByteTensor(self.resolution)
         self.currentbit = len(self.randbits) - 1
-        self.depth = int(state["depth"])
+        self.depth = (
+            None if state["depth"] is None else int(state["depth"])
+        )
         self.buffersize = int(state["buffersize"])
         self.samplerate = float(state["samplerate"])
+        self.count = int(state["size"])
+        self.batchcount = int(state.get("batchcount", 0))
+        if self.depth is None:
+            self.firstfree = [0]
+            self.data = None
+            self.extremes = None
+            self.dtype = None
+            self.device = None
+            return
+
         firstfree = []
         buffers = []
         for i, s in enumerate(state["sizes"]):
@@ -978,8 +1009,6 @@ class Quantile(Stat):
         self.firstfree = firstfree
         self.data = buffers
         self.extremes = torch.from_numpy((state["extremes"]))
-        self.count = int(state["size"])
-        self.batchcount = int(state.get("batchcount", 0))
         self.dtype = self.extremes.dtype
         self.device = self.extremes.device
 
@@ -1162,7 +1191,7 @@ def sample_portion(vec, p=0.5):
     return vec[bits]
 
 
-class TopK:
+class TopK(Stat):
     """A class to keep a running tally of the the top k values (and indexes)
     of any number of torch feature components.  Will work on the GPU if
     the data is on the GPU.  Tracks largest by default, but tracks smallest
@@ -1220,7 +1249,7 @@ class TopK:
         # Pick: copy the top sk of the next batch into the buffer.
         # Currently strided topk is slow.  So we clone after transpose.
         # TODO: remove the clone() if it becomes faster.
-        cdata = data.reshape(size, numpy.prod(data.shape[1:])).t().clone()
+        cdata = data.reshape(size, -1).t().clone()
         td, ti = cdata.topk(sk, sorted=False, largest=self.largest)
         self.top_data[:, self.next: self.next + sk] = td
         if index is not None:
@@ -1270,8 +1299,16 @@ class TopK:
             count=self.count,
             largest=self.largest,
             data_shape=self.data_shape and tuple(self.data_shape),
-            top_data=self.top_data.cpu().detach().numpy(),
-            top_index=self.top_index.cpu().detach().numpy(),
+            top_data=(
+                None
+                if self.top_data is None
+                else self.top_data.cpu().detach().numpy()
+            ),
+            top_index=(
+                None
+                if self.top_index is None
+                else self.top_index.cpu().detach().numpy()
+            ),
             next=self.next,
             linear_index=(
                 self.linear_index.cpu().numpy()
@@ -1288,14 +1325,16 @@ class TopK:
         self.data_shape = (
             None if state["data_shape"] is None else tuple(state["data_shape"])
         )
-        self.top_data = torch.from_numpy(state["top_data"])
-        self.top_index = torch.from_numpy(state["top_index"])
+        self.top_data = _from_numpy(state["top_data"])
+        self.top_index = _from_numpy(state["top_index"])
         self.next = int(state["next"])
+        linear_index = state["linear_index"]
         self.linear_index = (
-            torch.from_numpy(state["linear_index"])
-            if len(state["linear_index"].shape) > 0
-            else int(state["linear_index"])
+            torch.from_numpy(linear_index)
+            if isinstance(linear_index, numpy.ndarray) and linear_index.ndim > 0
+            else int(linear_index)
         )
+        self.perm = state.get("perm")
 
 
 class History(Stat):
