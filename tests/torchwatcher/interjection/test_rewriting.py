@@ -74,6 +74,35 @@ def test_replace_restores_source_mode_after_failure():
     assert not model.linear.training
 
 
+def test_replace_rejects_mixed_mode_module_traced_through_by_fx():
+    class ModeDependentBlock(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(1, 1)
+
+        def forward(self, inputs):
+            if self.training:
+                return self.linear(inputs)
+            return -self.linear(inputs)
+
+    model = nn.Sequential(ModeDependentBlock())
+    model.train()
+    model[0].eval()
+
+    with pytest.raises(ValueError, match="mixed training modes.*'0'"):
+        replace(
+            model,
+            matches_module_class(nn.Linear),
+            lambda original: nn.Linear(
+                original.in_features,
+                original.out_features,
+            ),
+        )
+
+    assert model.training
+    assert not model[0].training
+
+
 def test_replace_does_not_mutate_tracer_kwargs():
     leaf_modules = [_RaisesInEval]
     tracer_kwargs = {"leaf_modules": leaf_modules}

@@ -114,6 +114,45 @@ def _set_default_tracer_kwargs(original_tr_kwargs: Optional[dict[str, Any]]) -> 
     )
     return result_tracer_kwargs
 
+
+def _validate_dual_graph_training_modes(
+        model: nn.Module,
+        tracer_kwargs: Optional[dict[str, Any]]) -> None:
+    """Reject mixed modes which would be specialized during FX tracing.
+
+    A leaf module retains its training flag as runtime module state. In
+    contrast, a module which FX traces through can use ``self.training`` in
+    Python control flow, permanently specializing the resulting graph. Two
+    root-level graphs cannot represent arbitrary per-module mode combinations.
+    """
+    tracer = HierarchyTracer(**_set_default_tracer_kwargs(tracer_kwargs))
+    root_mode = model.training
+    mismatched = []
+
+    def visit(module: nn.Module, prefix: str, ancestors: set[int]) -> None:
+        for child_name, child in module._modules.items():
+            if child is None:
+                continue
+            qualified_name = (
+                f"{prefix}.{child_name}" if prefix else child_name
+            )
+            is_leaf = tracer.is_leaf_module(child, qualified_name)
+            if child.training is not root_mode and not is_leaf:
+                mismatched.append(qualified_name)
+            if not is_leaf and id(child) not in ancestors:
+                visit(child, qualified_name, ancestors | {id(child)})
+
+    visit(model, "", {id(model)})
+    if mismatched:
+        names = ", ".join(repr(name) for name in mismatched)
+        raise ValueError(
+            "dual-graph tracing does not support mixed training modes for "
+            f"modules traced through by FX; mismatched modules: {names}. "
+            "Make their modes uniform or add their classes to "
+            "tracer_kwargs['leaf_modules']."
+        )
+
+
 def symbolic_trace(model: Union[torch.nn.Module, Callable[..., Any]],
                    tracer_kwargs: Optional[Dict[str, Any]] = None,
                    concrete_args: Optional[Dict[str, Any]] = None,
@@ -428,6 +467,8 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
     if 'leaf_modules' not in tracer_kwargs:
         tracer_kwargs['leaf_modules'] = []
     tracer_kwargs['leaf_modules'].append(GradientIdentity)
+
+    _validate_dual_graph_training_modes(model, tracer_kwargs)
 
     with preserve_training_modes(model):
         graphmodules = {}

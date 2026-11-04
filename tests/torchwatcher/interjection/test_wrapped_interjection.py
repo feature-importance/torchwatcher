@@ -587,6 +587,39 @@ def test_trace_restores_mixed_source_modes():
     assert not model[0].training
 
 
+def test_trace_rejects_mixed_mode_module_traced_through_by_fx():
+    class ModeDependentBlock(nn.Module):
+        def forward(self, inputs):
+            return inputs + 1 if self.training else inputs - 1
+
+    model = nn.Sequential(ModeDependentBlock())
+    model.train()
+    model[0].eval()
+
+    with pytest.raises(
+            ValueError,
+            match="mixed training modes.*'0'.*leaf_modules"):
+        trace(model)
+
+    assert model.training
+    assert not model[0].training
+
+
+def test_trace_allows_mixed_mode_custom_leaf_module():
+    class ModeDependentBlock(nn.Module):
+        def forward(self, inputs):
+            return inputs + 1 if self.training else inputs - 1
+
+    model = nn.Sequential(ModeDependentBlock())
+    model.train()
+    model[0].eval()
+
+    trace(model, tracer_kwargs={"leaf_modules": [ModeDependentBlock]})
+
+    assert model.training
+    assert not model[0].training
+
+
 def test_trace_restores_source_mode_after_failure():
     model = _RaisesInEval()
     model.train()

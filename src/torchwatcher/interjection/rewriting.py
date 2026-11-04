@@ -12,6 +12,7 @@ from .tracing import (
     DualGraphModule,
     _copy_tracer_kwargs,
     _get_name,
+    _validate_dual_graph_training_modes,
 )
 
 
@@ -110,6 +111,7 @@ def replace(model: nn.Module, selector: NodeSelector,
     is_training = model.training
 
     tracer_kwargs = _copy_tracer_kwargs(tracer_kwargs)
+    _validate_dual_graph_training_modes(model, tracer_kwargs)
 
     with preserve_training_modes(model):
         graphs = {}

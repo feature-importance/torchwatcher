@@ -208,6 +208,20 @@ watched_model = interject_by_match(
 This is useful when a block should appear as a single graph node rather than
 being traced internally.
 
+The dual-graph helpers (`trace`, the FX-based `interject_by_*` functions, and
+`replace`) build one graph for training and one for evaluation. They cannot
+represent independent training modes for modules whose Python implementation is
+traced through: a branch on `self.training` would be permanently specialized
+while tracing. TorchWatcher therefore raises if such a module has a different
+training mode from the root model.
+
+Mode-dependent modules can instead be added to `leaf_modules`, as above. Their
+mode remains runtime module state rather than being baked into the FX graph.
+Standard PyTorch layers such as batch normalization and dropout are already FX
+leaf modules. Mixed leaf modes are allowed, but root-level `train()` and
+`eval()` calls still recursively update them in the usual PyTorch way; configure
+any required leaf overrides on the returned model after changing its root mode.
+
 ## Native Interjections
 
 Native interjections are interjections that are inserted into a model without using the `torch.fx` tracing API.
