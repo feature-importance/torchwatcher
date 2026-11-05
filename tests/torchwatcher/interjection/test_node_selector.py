@@ -1,3 +1,4 @@
+import torch
 from torch import nn
 
 from torchwatcher.interjection.node_selector import (
@@ -10,6 +11,7 @@ from torchwatcher.interjection.node_selector import (
     matches_name,
     nth,
 )
+from torchwatcher.interjection.node_selector.node_types import Shuffle
 from torchwatcher.interjection.tracing import symbolic_trace
 
 
@@ -115,3 +117,31 @@ def test_has_preceding_ignores_earlier_nodes_on_unrelated_branch():
     )
 
     assert _selected_names(_BranchedModel(), selector) == []
+
+
+def test_shuffle_selectors_match_channel_and_pixel_shuffle_modules():
+    assert _selected_names(
+        nn.Sequential(nn.ChannelShuffle(2)),
+        Shuffle.is_channel_shuffle,
+    ) == ["_0"]
+    assert _selected_names(
+        nn.Sequential(nn.PixelShuffle(2)),
+        Shuffle.is_pixel_shuffle,
+    ) == ["_0"]
+    assert _selected_names(
+        nn.Sequential(nn.PixelUnshuffle(2)),
+        Shuffle.is_pixel_unshuffle,
+    ) == ["_0"]
+
+
+def test_shuffle_selectors_match_functional_calls():
+    class FunctionalShuffles(nn.Module):
+        def forward(self, inputs):
+            shuffled = torch.channel_shuffle(inputs, 2)
+            shuffled = torch.pixel_shuffle(shuffled, 2)
+            return torch.pixel_unshuffle(shuffled, 2)
+
+    assert _selected_names(
+        FunctionalShuffles(),
+        Shuffle.is_shuffle,
+    ) == ["channel_shuffle", "pixel_shuffle", "pixel_unshuffle"]

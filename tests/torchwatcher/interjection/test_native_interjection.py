@@ -319,6 +319,30 @@ def test_native_interjection_preserves_checkpoint_and_dtype_behaviour():
     )
 
 
+def test_native_interjection_preserves_original_load_state_post_hooks():
+    model = nn.Sequential(nn.Linear(2, 1))
+    original_module = model[0]
+    calls = []
+
+    def post_hook(module, incompatible_keys):
+        calls.append((module, incompatible_keys))
+
+    original_module.register_load_state_dict_post_hook(post_hook)
+    watched_model = interject_by_module_class_native(
+        model,
+        nn.Linear,
+        _RecordingWrappedInterjection(),
+        clone=False,
+    )
+
+    watched_model.load_state_dict(watched_model.state_dict(), strict=True)
+
+    assert len(calls) == 1
+    assert calls[0][0] is original_module
+    assert calls[0][1].missing_keys == []
+    assert calls[0][1].unexpected_keys == []
+
+
 def test_native_interjection_delegates_apply_to_original_module():
     watched_model = interject_by_module_class_native(
         nn.Sequential(nn.Linear(2, 1)),

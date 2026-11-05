@@ -709,9 +709,9 @@ class Shuffle(MultiNodeSelector, Enum):
         getattr(torch.nn, "ChannelShuffle", None),
         getattr(torch.nn.functional, "channel_shuffle", None),
         getattr(torch.nn.functional, "native_channel_shuffle", None)
-    ],
-    is_pixel_shuffle = Vision.is_pixel_shuffle
-    is_pixel_unshuffle = Vision.is_pixel_unshuffle
+    ]
+    is_pixel_shuffle = Vision.is_pixel_shuffle.value
+    is_pixel_unshuffle = Vision.is_pixel_unshuffle.value
     is_shuffle = _All()
 
     def __init__(self, value):

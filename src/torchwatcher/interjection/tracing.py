@@ -803,6 +803,9 @@ class _NativeInterjectionWrapper(nn.Module):
         self._non_persistent_buffers_set = module._non_persistent_buffers_set
         self._version = module._version
         self.training = module.training
+        self.register_load_state_dict_post_hook(
+            self._dispatch_original_load_state_dict_post_hooks
+        )
 
     @property
     def _original_module(self):
@@ -855,6 +858,14 @@ class _NativeInterjectionWrapper(nn.Module):
 
     def _load_from_state_dict(self, *args, **kwargs):
         return self._original_module._load_from_state_dict(*args, **kwargs)
+
+    def _dispatch_original_load_state_dict_post_hooks(
+            self,
+            _module,
+            incompatible_keys,
+    ):
+        for hook in self._original_module._load_state_dict_post_hooks.values():
+            hook(self._original_module, incompatible_keys)
 
     def forward(self, *args, **kwargs):
         return self._interjection.forward(
