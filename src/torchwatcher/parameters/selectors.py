@@ -10,6 +10,7 @@ from typing import Callable, Iterator, Self, Type
 from torch import nn
 
 from torchwatcher import utils
+from torchwatcher.interjection.tracing import DualGraphModule
 
 
 @dataclass(frozen=True)
@@ -296,21 +297,27 @@ def _parameter_occurrences(
         model: nn.Module
 ) -> list[tuple[nn.Parameter, ParameterRegistration]]:
     occurrences = []
-    for module_name, module in model.named_modules(remove_duplicate=False):
-        for parameter_name, parameter in module.named_parameters(
-                recurse=False,
-                remove_duplicate=False
-        ):
-            full_name = (
-                f"{module_name}.{parameter_name}"
-                if module_name else parameter_name
-            )
-            occurrences.append((parameter, ParameterRegistration(
-                full_name=full_name,
-                module_name=module_name,
-                parameter_name=parameter_name,
-                module=module,
-            )))
+    roots = (
+        (model.train_module, model.eval_module)
+        if isinstance(model, DualGraphModule)
+        else (model,)
+    )
+    for root in roots:
+        for module_name, module in root.named_modules(remove_duplicate=False):
+            for parameter_name, parameter in module.named_parameters(
+                    recurse=False,
+                    remove_duplicate=False
+            ):
+                full_name = (
+                    f"{module_name}.{parameter_name}"
+                    if module_name else parameter_name
+                )
+                occurrences.append((parameter, ParameterRegistration(
+                    full_name=full_name,
+                    module_name=module_name,
+                    parameter_name=parameter_name,
+                    module=module,
+                )))
     return occurrences
 
 

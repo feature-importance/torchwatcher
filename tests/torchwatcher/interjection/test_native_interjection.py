@@ -1,3 +1,5 @@
+import pickle
+
 import torch
 from torch import nn
 
@@ -314,4 +316,55 @@ def test_native_interjection_preserves_checkpoint_and_dtype_behaviour():
     torch.testing.assert_close(
         restored(torch.ones(1, 2, dtype=torch.float64)),
         output,
+    )
+
+
+def test_native_interjection_delegates_apply_to_original_module():
+    watched_model = interject_by_module_class_native(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        _RecordingWrappedInterjection(),
+    )
+    visited = []
+
+    def initialise(module):
+        if isinstance(module, nn.Linear):
+            visited.append(module)
+            nn.init.constant_(module.weight, 3.0)
+
+    watched_model.apply(initialise)
+
+    assert len(visited) == 1
+    torch.testing.assert_close(
+        watched_model(torch.ones(1, 2)),
+        visited[0].bias.unsqueeze(0) + 6.0,
+    )
+
+
+def test_native_interjected_model_can_be_pickled():
+    watched_model = interject_by_module_class_native(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        _RecordingWrappedInterjection(),
+    )
+    inputs = torch.ones(1, 2)
+    expected = watched_model(inputs)
+
+    restored = pickle.loads(pickle.dumps(watched_model))
+
+    torch.testing.assert_close(restored(inputs), expected)
+
+
+def test_native_forward_interjection_adapter_can_be_pickled():
+    watched_model = interject_by_module_class_native(
+        nn.Sequential(nn.ReLU()),
+        nn.ReLU,
+        _RecordingReplacement(),
+    )
+
+    restored = pickle.loads(pickle.dumps(watched_model))
+
+    torch.testing.assert_close(
+        restored(torch.tensor([-2.0, 3.0])),
+        torch.tensor([5.0, 8.0]),
     )

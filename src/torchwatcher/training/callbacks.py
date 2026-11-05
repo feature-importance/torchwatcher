@@ -236,6 +236,8 @@ class AnalyserEvaluation(Callback):
                 self.analyser.reset()
                 self.analyser.enabled = True
                 model.eval()
+                if isinstance(self.analyser, nn.Module):
+                    self.analyser.eval()
 
                 with torch.set_grad_enabled(self.compute_gradients):
                     for batch in self.loader:

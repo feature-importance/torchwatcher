@@ -15,6 +15,7 @@ from torchwatcher.parameters.selectors import (
     parameters,
     select_parameters,
 )
+from torchwatcher.interjection import trace
 
 
 class ExampleModel(nn.Module):
@@ -258,3 +259,45 @@ def test_select_parameters_validates_its_arguments():
 
     with pytest.raises(TypeError, match="ParameterSelector"):
         select_parameters(ExampleModel(), lambda info: True)
+
+
+def test_dual_graph_selectors_use_original_parameter_names():
+    class ModeSpecificModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.train_layer = nn.Linear(2, 2)
+            self.eval_layer = nn.Linear(2, 1)
+
+        def forward(self, inputs):
+            if self.training:
+                return self.train_layer(inputs)
+            return self.eval_layer(inputs)
+
+    model = trace(ModeSpecificModel())
+
+    assert [name for name, _ in model.named_parameters()] == [
+        "train_layer.weight",
+        "train_layer.bias",
+        "eval_layer.weight",
+        "eval_layer.bias",
+    ]
+    assert _names(model) == [
+        "train_layer.weight",
+        "train_layer.bias",
+        "eval_layer.weight",
+        "eval_layer.bias",
+    ]
+    assert _names(
+        model,
+        matches_full_name("train_layer.weight"),
+    ) == ["train_layer.weight"]
+    assert _names(
+        model,
+        matches_module_name("eval_layer"),
+    ) == ["eval_layer.weight", "eval_layer.bias"]
+    assert _names(model, matches_module_class(nn.Linear)) == [
+        "train_layer.weight",
+        "train_layer.bias",
+        "eval_layer.weight",
+        "eval_layer.bias",
+    ]

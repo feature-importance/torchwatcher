@@ -846,6 +846,34 @@ def test_dual_graph_names_are_isolated_per_instance():
     assert type(first).__name__ == "DualGraphModule"
 
 
+def test_dual_graph_apply_visits_each_logical_module_once():
+    analyser = NameAnalyser()
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        analyser,
+    )
+    visited = []
+
+    def initialise(module):
+        if isinstance(module, nn.Linear):
+            visited.append(module)
+            nn.init.constant_(module.weight, 3.0)
+
+    watched_model.apply(initialise)
+
+    assert len(visited) == 1
+    for training in (True, False):
+        operation = analyser.interjection.wrapped_module(
+            "0",
+            training=training,
+        ).get_submodule("0")
+        torch.testing.assert_close(
+            operation.weight,
+            torch.full_like(operation.weight, 3.0),
+        )
+
+
 def test_trace_rejects_mixed_mode_module_traced_through_by_fx():
     class ModeDependentBlock(nn.Module):
         def forward(self, inputs):

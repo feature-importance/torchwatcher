@@ -4,8 +4,11 @@ import torchbearer
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from torchwatcher.analysis import NameAnalyser, PerClassAnalyser
-from torchwatcher.interjection import interject_by_name
+from torchwatcher.analysis import Analyser, NameAnalyser, PerClassAnalyser
+from torchwatcher.interjection import (
+    interject_by_module_class_native,
+    interject_by_name,
+)
 from torchwatcher.logging import InMemorySink
 from torchwatcher.parameters import selectors
 from torchwatcher.training import (
@@ -261,6 +264,34 @@ def test_analyser_evaluation_restores_independent_analyser_mode():
 
     assert model.training
     assert not analyser.training
+
+
+def test_analyser_evaluation_evaluates_native_analyser_and_restores_mode():
+    class ModeAnalyser(Analyser[bool]):
+        def process_batch_state(self, name, state, working_results):
+            return self.training
+
+    analyser = ModeAnalyser()
+    model = interject_by_module_class_native(
+        nn.Sequential(nn.Identity()),
+        nn.Identity,
+        analyser,
+    )
+    model.train()
+    analyser.train()
+    evaluation = AnalyserEvaluation(
+        analyser,
+        DataLoader(TensorDataset(torch.randn(2, 2)), batch_size=1),
+    )
+
+    record = evaluation.record(
+        {torchbearer.MODEL: model},
+        event="manual",
+    )
+
+    assert record["result"] == {"0": False}
+    assert model.training
+    assert analyser.training
 
 
 def test_analyser_evaluation_restores_mixed_model_modes():

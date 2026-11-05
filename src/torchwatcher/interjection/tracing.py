@@ -56,6 +56,75 @@ class DualGraphModule(nn.Module):
         else:
             return self.eval_module(*args, **kwargs)
 
+    def named_parameters(
+            self,
+            prefix: str = "",
+            recurse: bool = True,
+            remove_duplicate: bool = True,
+    ):
+        """Yield parameters under their original logical names.
+
+        The two graph modules are implementation details. Common parameters
+        therefore appear once without a ``train_module`` or ``eval_module``
+        prefix, while parameters used by only one mode remain visible.
+        """
+        if not recurse:
+            yield from super().named_parameters(
+                prefix=prefix,
+                recurse=False,
+                remove_duplicate=remove_duplicate,
+            )
+            return
+
+        seen_parameters = set()
+        seen_registrations = set()
+        for graph_module in (self.train_module, self.eval_module):
+            for name, parameter in graph_module.named_parameters(
+                    prefix=prefix,
+                    remove_duplicate=False,
+            ):
+                registration = (name, id(parameter))
+                if registration in seen_registrations:
+                    continue
+                seen_registrations.add(registration)
+                if remove_duplicate and parameter in seen_parameters:
+                    continue
+                seen_parameters.add(parameter)
+                yield name, parameter
+
+    def apply(self, fn: Callable[[nn.Module], None]):
+        """Apply ``fn`` once to each logical module in both mode graphs.
+
+        Train and eval graphs contain distinct module objects whose parameters
+        and buffers can represent the same original module. Traversing both
+        registered children normally would therefore apply initialisers and
+        other mutations more than once.
+        """
+        modules = []
+        seen_names = set()
+        seen_modules = set()
+        seen_registrations = set()
+        for graph_module in (self.train_module, self.eval_module):
+            for name, module in graph_module.named_modules():
+                registration = (
+                    id(module._parameters),
+                    id(module._buffers),
+                )
+                if (name in seen_names
+                        or id(module) in seen_modules
+                        or registration in seen_registrations):
+                    continue
+                seen_names.add(name)
+                seen_modules.add(id(module))
+                seen_registrations.add(registration)
+                modules.append(module)
+
+        # Match nn.Module.apply's child-before-parent ordering.
+        for module in reversed(modules):
+            fn(module)
+        fn(self)
+        return self
+
 
 def _get_name(model: Union[torch.nn.Module, Callable[..., Any]]) -> str:
     """Get the name of a model; used for naming the wrapped GraphModule.
@@ -650,6 +719,151 @@ def trim(network: fx.GraphModule):
     #  training!)
     pass
 
+
+class _NativeForwardInterjection(WrappedForwardInterjection):
+    """Adapt an output-only interjection for native module wrapping."""
+
+    def __init__(self, interjection: ForwardInterjection):
+        super().__init__()
+        self.interjection = interjection
+
+    def process(self, name, module, inputs, outputs):
+        # Forward interjections observe the output because they are placed
+        # after the selected operation.
+        return self.interjection.process(name, module, outputs)
+
+    def register(self, name, module):
+        super().register(name, module)
+        self.interjection.register(name, module)
+
+
+class _NativeCall(nn.Module):
+    """Call a native module while making keyword inputs visible to hooks."""
+
+    def __init__(self, module: nn.Module):
+        super().__init__()
+        # The model wrapper owns the module. Keep only a non-registering
+        # reference here so hook dispatch does not change state-dict keys or
+        # let the interjection control the module lifecycle.
+        self._module = (module,)
+
+    def __call__(self, *args, **kwargs):
+        # Full backward hooks only receive gradients for positional inputs.
+        # Present keyword values positionally to the private hooked wrapper,
+        # then reconstruct the original call in forward. The context-local
+        # stack keeps recursive and concurrent calls independent.
+        module_id = id(self)
+        call_specs = _native_call_specs.get()
+        stack = call_specs.get(module_id, ())
+        spec = (len(args), tuple(kwargs))
+        token = _native_call_specs.set({
+            **call_specs,
+            module_id: (*stack, spec),
+        })
+        try:
+            return super().__call__(*args, *kwargs.values())
+        finally:
+            _native_call_specs.reset(token)
+
+    def forward(self, *flattened_args):
+        positional_count, keyword_names = (
+            _native_call_specs.get()[id(self)][-1]
+        )
+        args = flattened_args[:positional_count]
+        keyword_values = flattened_args[positional_count:]
+        kwargs = dict(zip(
+            keyword_names,
+            keyword_values,
+            strict=True,
+        ))
+        return self._module[0](*args, **kwargs)
+
+
+class _NativeInterjectionWrapper(nn.Module):
+    """Transparent, serialisable owner for a natively interjected module."""
+
+    def __init__(
+            self,
+            name: str,
+            module: nn.Module,
+            interjection: Interjection,
+    ):
+        super().__init__()
+        self._torchwatcher_name = name
+        self._torchwatcher_original_module = (module,)
+        self._torchwatcher_interjection = (interjection,)
+        # The wrapper occupies the original registration slot, so it must
+        # expose the target module's registrations directly. If the target
+        # were instead registered as a child, ``0.weight`` would become
+        # ``0.0.weight`` and selectors/checkpoints would no longer describe
+        # the original model.
+        self._parameters = module._parameters
+        self._buffers = module._buffers
+        self._modules = module._modules
+        self._non_persistent_buffers_set = module._non_persistent_buffers_set
+        self._version = module._version
+        self.training = module.training
+
+    @property
+    def _original_module(self):
+        return object.__getattribute__(
+            self,
+            "_torchwatcher_original_module",
+        )[0]
+
+    @property
+    def _interjection(self):
+        return object.__getattribute__(
+            self,
+            "_torchwatcher_interjection",
+        )[0]
+
+    def __getattr__(self, attribute):
+        try:
+            return super().__getattr__(attribute)
+        except AttributeError as error:
+            try:
+                original_module = self._original_module
+            except AttributeError:
+                raise error
+            return getattr(original_module, attribute)
+
+    def named_modules(self, memo=None, prefix="", remove_duplicate=True):
+        # Parameter selectors (and standard PyTorch traversal) should see the
+        # original owner and its original qualified name.
+        yield from self._original_module.named_modules(
+            memo=memo,
+            prefix=prefix,
+            remove_duplicate=remove_duplicate,
+        )
+
+    def train(self, mode: bool = True):
+        self._original_module.train(mode)
+        self.training = self._original_module.training
+        return self
+
+    def apply(self, fn):
+        self._original_module.apply(fn)
+        return self
+
+    def _apply(self, fn, recurse=True):
+        self._original_module._apply(fn, recurse=recurse)
+        return self
+
+    def state_dict(self, *args, **kwargs):
+        return self._original_module.state_dict(*args, **kwargs)
+
+    def _load_from_state_dict(self, *args, **kwargs):
+        return self._original_module._load_from_state_dict(*args, **kwargs)
+
+    def forward(self, *args, **kwargs):
+        return self._interjection.forward(
+            self._torchwatcher_name,
+            *args,
+            **kwargs,
+        )
+
+
 def interject_by_module_class_native(model: nn.Module,
                                      target_module_class: Type[nn.Module],
                                      interjection: Interjection,
@@ -687,130 +901,16 @@ def interject_by_module_class_native(model: nn.Module,
         suffix += 1
 
     if isinstance(interjection, ForwardInterjection):
-        class _Wrapped(WrappedForwardInterjection):
-            def __init__(self, inter: Interjection):
-                super().__init__()
-                self.inter = inter
-
-            def process(self, name: str, module: [None | nn.Module], inputs, outputs):
-                # forward interjections observe the output because they are placed _after_
-                return self.inter.process(name, module, outputs)
-
-            def register(self, name: str, module: [None | nn.Module]):
-                super().register(name, module)
-                self.inter.register(name, module)
-
-        interjection = _Wrapped(interjection)
+        interjection = _NativeForwardInterjection(interjection)
 
     def add_interjection(name, module):
-        class _NativeCall(nn.Module):
-            def __init__(self):
-                super().__init__()
-                # The model wrapper owns the module. Keep only a non-registering
-                # reference here so hook dispatch does not change state-dict keys
-                # or let the interjection control the module lifecycle.
-                self._module = (module,)
-
-            def __call__(self, *args, **kwargs):
-                # Full backward hooks only receive gradients for positional
-                # inputs. Present keyword values positionally to the private
-                # hooked wrapper, then reconstruct the original call in
-                # forward. The context-local stack keeps recursive and
-                # concurrent calls independent.
-                module_id = id(self)
-                call_specs = _native_call_specs.get()
-                stack = call_specs.get(module_id, ())
-                spec = (len(args), tuple(kwargs))
-                token = _native_call_specs.set({
-                    **call_specs,
-                    module_id: (*stack, spec),
-                })
-                try:
-                    return super().__call__(*args, *kwargs.values())
-                finally:
-                    _native_call_specs.reset(token)
-
-            def forward(self, *flattened_args):
-                positional_count, keyword_names = (
-                    _native_call_specs.get()[id(self)][-1]
-                )
-                args = flattened_args[:positional_count]
-                keyword_values = flattened_args[positional_count:]
-                kwargs = dict(zip(
-                    keyword_names,
-                    keyword_values,
-                    strict=True,
-                ))
-                return self._module[0](*args, **kwargs)
-
-        native_call = _NativeCall()
-
-        class _NameWrapper(nn.Module):
-            def __init__(self):
-                super().__init__()
-                # The wrapper occupies the original registration slot, so it
-                # must expose the target module's registrations directly. If
-                # the target were instead registered as a child, ``0.weight``
-                # would become ``0.0.weight`` and selectors/checkpoints would
-                # no longer describe the original model.
-                self._torchwatcher_original_module = (module,)
-                self._parameters = module._parameters
-                self._buffers = module._buffers
-                self._modules = module._modules
-                self._non_persistent_buffers_set = (
-                    module._non_persistent_buffers_set
-                )
-                self._version = module._version
-                self.training = module.training
-
-            @property
-            def _original_module(self):
-                return self._torchwatcher_original_module[0]
-
-            def __getattr__(self, attribute):
-                try:
-                    return super().__getattr__(attribute)
-                except AttributeError:
-                    return getattr(self._original_module, attribute)
-
-            def named_modules(
-                    self,
-                    memo=None,
-                    prefix="",
-                    remove_duplicate=True):
-                # Parameter selectors (and standard PyTorch traversal) should
-                # see the original owner and its original qualified name.
-                yield from self._original_module.named_modules(
-                    memo=memo,
-                    prefix=prefix,
-                    remove_duplicate=remove_duplicate,
-                )
-
-            def train(self, mode: bool = True):
-                self._original_module.train(mode)
-                self.training = self._original_module.training
-                return self
-
-            def _apply(self, fn, recurse=True):
-                self._original_module._apply(fn, recurse=recurse)
-                return self
-
-            def state_dict(self, *args, **kwargs):
-                return self._original_module.state_dict(*args, **kwargs)
-
-            def _load_from_state_dict(self, *args, **kwargs):
-                return self._original_module._load_from_state_dict(
-                    *args, **kwargs
-                )
-
-            def forward(self, *args, **kwargs):
-                return interjection.forward(name, *args, **kwargs)
+        native_call = _NativeCall(module)
 
         # Each alias gets its own call module so names and backward hooks stay
         # distinct, while every alias wrapper exposes the same original module.
         interjection.register(name, native_call)
         interjection.register_original_module(name, module)
-        return _NameWrapper()
+        return _NativeInterjectionWrapper(name, module, interjection)
 
     traversed: set[int] = set()
 
