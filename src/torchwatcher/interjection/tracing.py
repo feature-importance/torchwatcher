@@ -36,6 +36,72 @@ _native_apply_modules: ContextVar[Optional[set[int]]] = ContextVar(
 )
 
 
+def _dual_graph_state_dict_hook(
+        module,
+        state_dict,
+        prefix,
+        _local_metadata,
+):
+    """Collapse mode-graph state into one logical checkpoint namespace."""
+    for graph_name in ("train_module", "eval_module"):
+        graph_prefix = f"{prefix}{graph_name}."
+        for key in tuple(state_dict):
+            if not key.startswith(graph_prefix):
+                continue
+            logical_key = f"{prefix}{key[len(graph_prefix):]}"
+            if logical_key not in state_dict:
+                state_dict[logical_key] = state_dict[key]
+            del state_dict[key]
+
+    metadata = getattr(state_dict, "_metadata", None)
+    if metadata is None:
+        return
+
+    logical_root = prefix[:-1]
+    for graph_name in ("train_module", "eval_module"):
+        graph_root = f"{prefix}{graph_name}"
+        for key in tuple(metadata):
+            if key == graph_root:
+                del metadata[key]
+                continue
+            if not key.startswith(f"{graph_root}."):
+                continue
+            suffix = key[len(graph_root) + 1:]
+            logical_key = (
+                f"{logical_root}.{suffix}" if logical_root else suffix
+            )
+            if logical_key not in metadata:
+                metadata[logical_key] = metadata[key]
+            del metadata[key]
+
+
+def _dual_graph_load_state_dict_pre_hook(
+        module,
+        state_dict,
+        prefix,
+        _local_metadata,
+        _strict,
+        _missing_keys,
+        _unexpected_keys,
+        _error_messages,
+):
+    """Expand logical checkpoint keys for each mode graph that owns them."""
+    translated_keys = set()
+    for graph_name in ("train_module", "eval_module"):
+        graph_module = getattr(module, graph_name)
+        for key in graph_module.state_dict():
+            logical_key = f"{prefix}{key}"
+            if logical_key not in state_dict:
+                continue
+            graph_key = f"{prefix}{graph_name}.{key}"
+            if graph_key not in state_dict:
+                state_dict[graph_key] = state_dict[logical_key]
+            translated_keys.add(logical_key)
+
+    for key in translated_keys:
+        del state_dict[key]
+
+
 class DualGraphModule(nn.Module):
     def __init__(self, train_module: nn.Module, eval_module: nn.Module,
                  class_name="DualGraphModule"):
@@ -46,6 +112,10 @@ class DualGraphModule(nn.Module):
         self.graph_name = class_name
         self.train_module = train_module
         self.eval_module = eval_module
+        self.register_state_dict_post_hook(_dual_graph_state_dict_hook)
+        self.register_load_state_dict_pre_hook(
+            _dual_graph_load_state_dict_pre_hook
+        )
 
     @property
     def graphmodule(self):
@@ -95,6 +165,36 @@ class DualGraphModule(nn.Module):
                     continue
                 seen_parameters.add(parameter)
                 yield name, parameter
+
+    def named_buffers(
+            self,
+            prefix: str = "",
+            recurse: bool = True,
+            remove_duplicate: bool = True,
+    ):
+        """Yield buffers once under their logical, mode-independent names."""
+        if not recurse:
+            yield from super().named_buffers(
+                prefix=prefix,
+                recurse=False,
+                remove_duplicate=remove_duplicate,
+            )
+            return
+
+        seen_buffers = set()
+        seen_names = set()
+        for graph_module in (self.train_module, self.eval_module):
+            for name, buffer in graph_module.named_buffers(
+                    prefix=prefix,
+                    remove_duplicate=False,
+            ):
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+                if remove_duplicate and buffer in seen_buffers:
+                    continue
+                seen_buffers.add(buffer)
+                yield name, buffer
 
     def apply(self, fn: Callable[[nn.Module], None]):
         """Apply ``fn`` once to each logical module in both mode graphs.

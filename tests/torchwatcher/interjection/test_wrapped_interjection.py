@@ -819,6 +819,20 @@ class _RaisesInEval(nn.Module):
         return inputs
 
 
+class _ModeStateModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.train_layer = nn.Linear(2, 2)
+        self.eval_layer = nn.Linear(2, 2)
+        self.register_buffer("train_scale", torch.ones(2))
+        self.register_buffer("eval_scale", torch.ones(2))
+
+    def forward(self, inputs):
+        if self.training:
+            return self.train_layer(inputs) * self.train_scale
+        return self.eval_layer(inputs) * self.eval_scale
+
+
 def test_trace_restores_mixed_source_modes():
     model = nn.Sequential(nn.BatchNorm1d(2), nn.ReLU())
     model.train()
@@ -874,6 +888,83 @@ def test_dual_graph_apply_visits_each_logical_module_once():
             operation.weight,
             torch.full_like(operation.weight, 3.0),
         )
+
+
+def test_dual_graph_buffers_use_logical_names():
+    watched_model = trace(_ModeStateModel())
+
+    assert [name for name, _ in watched_model.named_buffers()] == [
+        "train_scale",
+        "eval_scale",
+    ]
+
+
+def test_dual_graph_buffers_remain_deduplicated_after_dtype_conversion():
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_buffer("scale", torch.ones(1))
+
+        def forward(self, inputs):
+            return inputs * self.scale
+
+    watched_model = trace(Model()).double()
+
+    assert [name for name, _ in watched_model.named_buffers()] == ["scale"]
+
+
+def test_dual_graph_checkpoint_uses_logical_names_and_loads_strictly():
+    source = _ModeStateModel()
+    source.train_layer.weight.data.fill_(2.0)
+    source.eval_layer.weight.data.fill_(3.0)
+    source.train_scale.fill_(4.0)
+    source.eval_scale.fill_(5.0)
+    watched_model = trace(_ModeStateModel())
+
+    watched_model.load_state_dict(source.state_dict(), strict=True)
+    checkpoint = watched_model.state_dict()
+
+    assert set(checkpoint) == set(source.state_dict())
+    assert all(
+        not name.startswith(("train_module.", "eval_module."))
+        for name in checkpoint
+    )
+    restored = _ModeStateModel()
+    restored.load_state_dict(checkpoint, strict=True)
+    for training in (True, False):
+        inputs = torch.ones(1, 2)
+        watched_model.train(training)
+        restored.train(training)
+        torch.testing.assert_close(
+            watched_model(inputs),
+            restored(inputs),
+        )
+
+
+def test_nested_dual_graph_checkpoint_uses_logical_names():
+    source = nn.Module()
+    source.watched = trace(_ModeStateModel())
+    source.watched.train_module.train_scale.fill_(4.0)
+    source.watched.eval_module.eval_scale.fill_(5.0)
+    checkpoint = source.state_dict()
+
+    assert "watched.train_scale" in checkpoint
+    assert "watched.eval_scale" in checkpoint
+    assert not any(".train_module." in name for name in checkpoint)
+    assert not any(".eval_module." in name for name in checkpoint)
+
+    restored = nn.Module()
+    restored.watched = trace(_ModeStateModel())
+    restored.load_state_dict(checkpoint, strict=True)
+
+    torch.testing.assert_close(
+        restored.watched.train_module.train_scale,
+        torch.full((2,), 4.0),
+    )
+    torch.testing.assert_close(
+        restored.watched.eval_module.eval_scale,
+        torch.full((2,), 5.0),
+    )
 
 
 def test_wrapped_backward_interjection_can_be_pickled():
