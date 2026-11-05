@@ -37,8 +37,9 @@ class DualGraphModule(nn.Module):
                  class_name="DualGraphModule"):
         super().__init__()
 
-        self.__class__.__name__ = class_name
-
+        # This is a per-instance label used by drawing and diagnostics. Renaming
+        # ``self.__class__`` would rename every DualGraphModule instance.
+        self.graph_name = class_name
         self.train_module = train_module
         self.eval_module = eval_module
 

@@ -828,6 +828,24 @@ def test_trace_restores_mixed_source_modes():
     assert not model[0].training
 
 
+def test_dual_graph_names_are_isolated_per_instance():
+    class FirstModel(nn.Module):
+        def forward(self, inputs):
+            return inputs + 1
+
+    class SecondModel(nn.Module):
+        def forward(self, inputs):
+            return inputs * 2
+
+    first = trace(FirstModel())
+    second = trace(SecondModel())
+
+    assert first.graph_name == "DualGraphModule_FirstModel"
+    assert second.graph_name == "DualGraphModule_SecondModel"
+    assert type(first) is type(second)
+    assert type(first).__name__ == "DualGraphModule"
+
+
 def test_trace_rejects_mixed_mode_module_traced_through_by_fx():
     class ModeDependentBlock(nn.Module):
         def forward(self, inputs):

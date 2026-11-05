@@ -429,7 +429,7 @@ def draw_graph(
         dot_graph_shape: Optional[str] = None,
         normalize_args: bool = False) -> pydot.Dot:
 
-    return SubmoduleFxGraphDrawer(module.graphmodule, module.__class__.__name__, ignore_getattr,
+    return SubmoduleFxGraphDrawer(module.graphmodule, module.graph_name, ignore_getattr,
                                   ignore_parameters_and_buffers, skip_node_names_in_args,
                                   parse_stack_trace, dot_graph_shape, normalize_args).get_dot_graph()
 
@@ -446,7 +446,7 @@ def draw_graph_pretty(
         trace_shapes(module, *inputs, **(input_kwargs or {}))
 
     return ShapeFxGraphDrawer(module.graphmodule,
-                              module.__class__.__name__,
+                              module.graph_name,
                               show_shapes,
                               show_node_names,
                               show_extra_info).get_dot_graph()

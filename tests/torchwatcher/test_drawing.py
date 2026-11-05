@@ -33,6 +33,20 @@ def test_parameter_edges_use_declared_qualified_node_ids():
     )
 
 
+def test_drawing_uses_the_dual_graph_instance_name():
+    first = trace(nn.Sequential(nn.Linear(2, 1)))
+
+    class OtherModel(nn.Module):
+        def forward(self, inputs):
+            return inputs + 1
+
+    trace(OtherModel())
+    graph_source = draw_graph(first).to_string()
+
+    assert "DualGraphModule_Sequential" in graph_source
+    assert "DualGraphModule_OtherModel" not in graph_source
+
+
 class _NestedOutput(nn.Module):
     def forward(self, inputs):
         return {"full": (inputs, {"slice": inputs[:, :1]})}

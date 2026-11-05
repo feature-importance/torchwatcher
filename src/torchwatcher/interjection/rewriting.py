@@ -55,9 +55,13 @@ def _replace_module(model: nn.Module, selector: NodeSelector,
     traced.delete_all_unused_submodules()
     traced.recompile()
 
-    traced.__class__.__name__ = class_name_prefix + model.__class__.__name__
-
-    return traced
+    # GraphModule provides a supported per-instance generated class name. Use
+    # that API instead of mutating the generated class after construction.
+    return GraphModule(
+        traced,
+        traced.graph,
+        class_name=class_name_prefix + model.__class__.__name__,
+    )
 
 
 def replace_module(model: nn.Module, selector: NodeSelector,

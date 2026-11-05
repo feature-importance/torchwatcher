@@ -2,7 +2,11 @@ import torch
 import pytest
 from torch import nn
 
-from torchwatcher.interjection import replace, replace_module_native
+from torchwatcher.interjection import (
+    replace,
+    replace_module,
+    replace_module_native,
+)
 from torchwatcher.interjection.node_selector import matches_module_class
 
 
@@ -119,6 +123,25 @@ def test_replace_does_not_mutate_tracer_kwargs():
 
     assert tracer_kwargs == {"leaf_modules": [_RaisesInEval]}
     assert tracer_kwargs["leaf_modules"] is leaf_modules
+
+
+def test_replace_module_uses_isolated_fx_class_names():
+    first = replace_module(
+        nn.Sequential(nn.ReLU()),
+        matches_module_class(nn.ReLU),
+        lambda _: nn.Identity(),
+        class_name_prefix="First_",
+    )
+    second = replace_module(
+        nn.Sequential(nn.ReLU()),
+        matches_module_class(nn.ReLU),
+        lambda _: nn.Identity(),
+        class_name_prefix="Second_",
+    )
+
+    assert type(first).__name__ == "First_Sequential"
+    assert type(second).__name__ == "Second_Sequential"
+    assert type(first) is not type(second)
 
 
 def test_native_replacement_can_replace_the_root_module():
