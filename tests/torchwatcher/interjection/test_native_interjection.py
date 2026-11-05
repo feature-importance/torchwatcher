@@ -365,6 +365,50 @@ def test_native_interjection_delegates_apply_to_original_module():
     )
 
 
+def test_native_interjection_apply_visits_shared_original_module_once():
+    watched_model = interject_by_module_class_native(
+        _SharedReLUModel(),
+        nn.ReLU,
+        _RecordingWrappedInterjection(),
+    )
+    visited = []
+
+    watched_model.apply(
+        lambda module: visited.append(module)
+        if isinstance(module, nn.ReLU) else None
+    )
+
+    assert visited == [watched_model.left._original_module]
+
+    watched_model.apply(
+        lambda module: visited.append(module)
+        if isinstance(module, nn.ReLU) else None
+    )
+
+    assert visited == [
+        watched_model.left._original_module,
+        watched_model.left._original_module,
+    ]
+
+
+def test_native_interjection_apply_preserves_child_first_order():
+    watched_model = interject_by_module_class_native(
+        _NestedTarget(_NestedTarget()),
+        _NestedTarget,
+        _RecordingWrappedInterjection(),
+    )
+    original_root = watched_model._original_module
+    original_child = original_root.root._original_module
+    visited = []
+
+    watched_model.apply(
+        lambda module: visited.append(module)
+        if isinstance(module, _NestedTarget) else None
+    )
+
+    assert visited == [original_child, original_root]
+
+
 def test_native_interjected_model_can_be_pickled():
     watched_model = interject_by_module_class_native(
         nn.Sequential(nn.Linear(2, 1)),
@@ -377,6 +421,23 @@ def test_native_interjected_model_can_be_pickled():
     restored = pickle.loads(pickle.dumps(watched_model))
 
     torch.testing.assert_close(restored(inputs), expected)
+
+
+def test_native_interjection_apply_deduplication_survives_pickling():
+    watched_model = interject_by_module_class_native(
+        _SharedReLUModel(),
+        nn.ReLU,
+        _RecordingWrappedInterjection(),
+    )
+
+    restored = pickle.loads(pickle.dumps(watched_model))
+    visited = []
+    restored.apply(
+        lambda module: visited.append(module)
+        if isinstance(module, nn.ReLU) else None
+    )
+
+    assert visited == [restored.left._original_module]
 
 
 def test_native_forward_interjection_adapter_can_be_pickled():

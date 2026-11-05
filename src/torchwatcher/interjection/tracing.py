@@ -30,6 +30,10 @@ _NativeCallSpec = tuple[int, tuple[str, ...]]
 _native_call_specs: ContextVar[
     dict[int, tuple[_NativeCallSpec, ...]]
 ] = ContextVar("_native_call_specs", default={})
+_native_apply_modules: ContextVar[Optional[set[int]]] = ContextVar(
+    "_native_apply_modules",
+    default=None,
+)
 
 
 class DualGraphModule(nn.Module):
@@ -846,8 +850,21 @@ class _NativeInterjectionWrapper(nn.Module):
         return self
 
     def apply(self, fn):
-        self._original_module.apply(fn)
-        return self
+        seen_modules = _native_apply_modules.get()
+        token = None
+        if seen_modules is None:
+            seen_modules = set()
+            token = _native_apply_modules.set(seen_modules)
+
+        try:
+            module_id = id(self._original_module)
+            if module_id not in seen_modules:
+                seen_modules.add(module_id)
+                self._original_module.apply(fn)
+            return self
+        finally:
+            if token is not None:
+                _native_apply_modules.reset(token)
 
     def _apply(self, fn, recurse=True):
         self._original_module._apply(fn, recurse=recurse)
@@ -873,6 +890,25 @@ class _NativeInterjectionWrapper(nn.Module):
             *args,
             **kwargs,
         )
+
+
+class _NativeApply:
+    """Coordinate one logical ``apply`` traversal across alias wrappers."""
+
+    def __init__(self, module: nn.Module):
+        self._module = (module,)
+
+    def __call__(self, fn):
+        module = self._module[0]
+        seen_modules = _native_apply_modules.get()
+        if seen_modules is not None:
+            return type(module).apply(module, fn)
+
+        token = _native_apply_modules.set(set())
+        try:
+            return type(module).apply(module, fn)
+        finally:
+            _native_apply_modules.reset(token)
 
 
 def interject_by_module_class_native(model: nn.Module,
@@ -914,7 +950,11 @@ def interject_by_module_class_native(model: nn.Module,
     if isinstance(interjection, ForwardInterjection):
         interjection = _NativeForwardInterjection(interjection)
 
+    has_interjection = False
+
     def add_interjection(name, module):
+        nonlocal has_interjection
+        has_interjection = True
         native_call = _NativeCall(module)
 
         # Each alias gets its own call module so names and backward hooks stay
@@ -953,4 +993,10 @@ def interject_by_module_class_native(model: nn.Module,
             module,
         )
 
-    return add_recursively(model, is_root=True)
+    model = add_recursively(model, is_root=True)
+    if has_interjection and not isinstance(
+            model,
+            _NativeInterjectionWrapper,
+    ):
+        model.apply = _NativeApply(model)
+    return model
