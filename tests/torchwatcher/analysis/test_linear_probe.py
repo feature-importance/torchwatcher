@@ -124,6 +124,46 @@ class TestLinearProbes(unittest.TestCase):
             self.assertEqual(child.working_results["0"].shape, (1, 2))
             self.assertEqual(child.interjection._wrapped, {})
 
+    def test_qualified_name_collisions_create_distinct_probes(self):
+        class Nested(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.b = nn.Identity()
+
+        class Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.a_b = nn.Identity()
+                self.a = Nested()
+
+            def forward(self, inputs):
+                return self.a.b(self.a_b(inputs))
+
+        probe = LinearProbe(
+            2,
+            partial_optim=lambda params: torch.optim.SGD(params, lr=0.1),
+            criterion=nn.CrossEntropyLoss(),
+        )
+        watched_model = interject_by_match(
+            Model(),
+            node_types.Linear.is_identity,
+            probe,
+        )
+
+        self.assertEqual(set(probe._probe_names), {"a_b", "a.b"})
+        self.assertEqual(len(set(probe._probe_names.values())), 2)
+        self.assertEqual(len(probe.probes), 2)
+        for name, optimiser in probe.optimisers.items():
+            registered_probe = probe.probes[probe._probe_names[name]]
+            self.assertIs(
+                optimiser.param_groups[0]["params"][0],
+                registered_probe.weight,
+            )
+
+        probe.targets = torch.tensor([0, 1])
+        watched_model(torch.randn(2, 3))
+        self.assertEqual(set(probe.working_results), {"a_b", "a.b"})
+
 
 if __name__ == '__main__':
     unittest.main()

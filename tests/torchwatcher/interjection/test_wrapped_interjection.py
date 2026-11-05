@@ -101,6 +101,69 @@ def test_qualified_module_names_treat_periods_literally():
     }
 
 
+def test_colliding_qualified_names_keep_distinct_registered_operations():
+    class Nested(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.b = nn.Linear(2, 2)
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.a_b = nn.Linear(2, 2)
+            self.a = Nested()
+
+        def forward(self, inputs):
+            return self.a.b(self.a_b(inputs))
+
+    analyser = NameAnalyser()
+    interject_by_module_class(Model(), nn.Linear, analyser)
+    registered = analyser.interjection._modules
+
+    operations = [
+        analyser.interjection.wrapped_module(name, training=training)
+        for name in ("a_b", "a.b")
+        for training in (True, False)
+    ]
+    assert len(registered) == 4
+    assert all(operation in registered.values() for operation in operations)
+
+    operation_parameters = {
+        id(parameter)
+        for operation in operations
+        for parameter in operation.parameters()
+    }
+    assert {id(parameter) for parameter in analyser.parameters()} == (
+        operation_parameters
+    )
+
+
+def test_numeric_suffix_in_module_name_is_not_treated_as_fx_suffix():
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.block = nn.Linear(1, 1, bias=False)
+            self.block_1 = nn.Linear(1, 1, bias=False)
+            self.block.weight.data.fill_(2)
+            self.block_1.weight.data.fill_(3)
+
+        def forward(self, inputs):
+            # Calling block_1 first exposed the old name normalisation: it was
+            # labelled block, and the real block was then labelled block_1.
+            return self.block(self.block_1(inputs))
+
+    interjection = _ModuleRecorder()
+    watched_model = interject_by_name(Model(), "block_1", interjection)
+
+    watched_model(torch.ones(1, 1))
+
+    assert interjection.names == ["block_1"]
+    torch.testing.assert_close(
+        interjection.modules[0].weight,
+        torch.full((1, 1), 3.0),
+    )
+
+
 def test_wrapped_backward_interjection_accepts_single_tensor_gradient():
     interjection = _ScaleBackward()
     watched_model = interject_by_module_class(

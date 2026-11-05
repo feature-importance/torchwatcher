@@ -8,6 +8,12 @@ from torchwatcher.interjection import (
     WrappedForwardInterjection,
     interject_by_module_class_native,
 )
+from torchwatcher.parameters.selectors import (
+    matches_full_name,
+    matches_module_class,
+    matches_module_name,
+    select_parameters,
+)
 
 
 class _RecordingReplacement(ForwardInterjection):
@@ -234,4 +240,78 @@ def test_native_interjection_mode_does_not_change_train_model_operation():
     torch.testing.assert_close(
         watched_model(torch.ones(4)),
         torch.zeros(4),
+    )
+
+
+def test_native_interjection_preserves_original_parameter_names_and_owners():
+    model = nn.Sequential(nn.Linear(2, 1))
+    original_parameter_names = [name for name, _ in model.named_parameters()]
+    original_state_names = list(model.state_dict())
+    interjection = _RecordingWrappedInterjection()
+
+    watched_model = interject_by_module_class_native(
+        model,
+        nn.Linear,
+        interjection,
+    )
+
+    assert [name for name, _ in watched_model.named_parameters()] == (
+        original_parameter_names
+    )
+    assert list(watched_model.state_dict()) == original_state_names
+    assert isinstance(dict(watched_model.named_modules())["0"], nn.Linear)
+    assert [
+        info.full_name
+        for info in select_parameters(
+            watched_model,
+            matches_full_name("0.weight"),
+        )
+    ] == ["0.weight"]
+    assert [
+        info.full_name
+        for info in select_parameters(
+            watched_model,
+            matches_module_name("0"),
+        )
+    ] == ["0.weight", "0.bias"]
+    selected_by_class = select_parameters(
+        watched_model,
+        matches_module_class(nn.Linear),
+    )
+    assert [info.full_name for info in selected_by_class] == [
+        "0.weight",
+        "0.bias",
+    ]
+    assert all(isinstance(info.module, nn.Linear) for info in selected_by_class)
+
+
+def test_native_interjection_preserves_checkpoint_and_dtype_behaviour():
+    model = nn.Sequential(nn.Linear(2, 1))
+    watched_model = interject_by_module_class_native(
+        model,
+        nn.Linear,
+        _RecordingWrappedInterjection(),
+    )
+    replacement_state = {
+        "0.weight": torch.full((1, 2), 3.0),
+        "0.bias": torch.full((1,), 4.0),
+    }
+
+    watched_model.load_state_dict(replacement_state, strict=True)
+    watched_model.double()
+    output = watched_model(torch.ones(1, 2, dtype=torch.float64))
+
+    torch.testing.assert_close(
+        output,
+        torch.full((1, 1), 10.0, dtype=torch.float64),
+    )
+    assert all(
+        parameter.dtype == torch.float64
+        for parameter in watched_model.parameters()
+    )
+    restored = nn.Sequential(nn.Linear(2, 1)).double()
+    restored.load_state_dict(watched_model.state_dict(), strict=True)
+    torch.testing.assert_close(
+        restored(torch.ones(1, 2, dtype=torch.float64)),
+        output,
     )

@@ -79,6 +79,29 @@ class WrappedForwardInterjection(Interjection):
         super().__init__()
         self._wrapped = {}
         self._original_modules = {}
+        self._wrapped_module_names = {}
+
+    def _wrapped_module_name(self, key, name: str) -> str:
+        """Return a unique, private registration name for a public node name."""
+        if key in self._wrapped_module_names:
+            return self._wrapped_module_names[key]
+
+        mode = "train" if key[1] else "eval"
+        preferred = f"{name.replace('.', '_')}_{mode}"
+        module_name = preferred
+        if module_name in self._modules:
+            # ``a.b`` and ``a_b`` have the same readable form. Keep public
+            # names untouched and disambiguate only the private nn.Module key.
+            module_name = f"{preferred}__{name.encode('utf-8').hex()}"
+            suffix = 1
+            while module_name in self._modules:
+                module_name = (
+                    f"{preferred}__{name.encode('utf-8').hex()}_{suffix}"
+                )
+                suffix += 1
+
+        self._wrapped_module_names[key] = module_name
+        return module_name
 
     def _registration_key(self, name):
         training = getattr(self, "_registration_training", None)
@@ -109,8 +132,7 @@ class WrappedForwardInterjection(Interjection):
             # Extracted FX operations belong to the interjection. Native
             # operations are already owned by their _NameWrapper; registering
             # them here as well would let the analyser's mode change the model.
-            module_name = name.replace(".", "_")
-            module_name += "_train" if key[1] else "_eval"
+            module_name = self._wrapped_module_name(key, name)
             self.add_module(module_name, module)
 
     def register_original_module(self, name: str, module: nn.Module | None):

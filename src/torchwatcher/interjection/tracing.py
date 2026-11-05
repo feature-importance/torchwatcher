@@ -85,10 +85,12 @@ class HierarchyTracer(NodePathTracer):
             if node_qualname:
                 node_qualname += "."
             node_qualname += str(node)
-
-        base, separator, suffix = node_qualname.rpartition("_")
-        if separator and base and suffix.isdigit():
-            node_qualname = base
+            # FX adds numeric suffixes to generated node names. A call_module
+            # qualname, by contrast, is the literal user-defined module path;
+            # names such as ``block_1`` must never be normalised to ``block``.
+            base, separator, suffix = node_qualname.rpartition("_")
+            if separator and base and suffix.isdigit():
+                node_qualname = base
 
         duplicate_prefix = f"{node_qualname}_"
         for existing in reversed(self.node_to_qualname.values()):
@@ -699,7 +701,7 @@ def interject_by_module_class_native(model: nn.Module,
 
         interjection = _Wrapped(interjection)
 
-    def add_interjection(name, module, *, is_root=False):
+    def add_interjection(name, module):
         class _NativeCall(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -745,19 +747,66 @@ def interject_by_module_class_native(model: nn.Module,
         class _NameWrapper(nn.Module):
             def __init__(self):
                 super().__init__()
-                if is_root:
-                    nm = "_torchwatcher_wrapped"
-                elif "." in name:
-                    _, nm = name.rsplit(".", 1)
-                else:
-                    nm = name
-                self.add_module(nm, module)
+                # The wrapper occupies the original registration slot, so it
+                # must expose the target module's registrations directly. If
+                # the target were instead registered as a child, ``0.weight``
+                # would become ``0.0.weight`` and selectors/checkpoints would
+                # no longer describe the original model.
+                self._torchwatcher_original_module = (module,)
+                self._parameters = module._parameters
+                self._buffers = module._buffers
+                self._modules = module._modules
+                self._non_persistent_buffers_set = (
+                    module._non_persistent_buffers_set
+                )
+                self._version = module._version
+                self.training = module.training
+
+            @property
+            def _original_module(self):
+                return self._torchwatcher_original_module[0]
+
+            def __getattr__(self, attribute):
+                try:
+                    return super().__getattr__(attribute)
+                except AttributeError:
+                    return getattr(self._original_module, attribute)
+
+            def named_modules(
+                    self,
+                    memo=None,
+                    prefix="",
+                    remove_duplicate=True):
+                # Parameter selectors (and standard PyTorch traversal) should
+                # see the original owner and its original qualified name.
+                yield from self._original_module.named_modules(
+                    memo=memo,
+                    prefix=prefix,
+                    remove_duplicate=remove_duplicate,
+                )
+
+            def train(self, mode: bool = True):
+                self._original_module.train(mode)
+                self.training = self._original_module.training
+                return self
+
+            def _apply(self, fn, recurse=True):
+                self._original_module._apply(fn, recurse=recurse)
+                return self
+
+            def state_dict(self, *args, **kwargs):
+                return self._original_module.state_dict(*args, **kwargs)
+
+            def _load_from_state_dict(self, *args, **kwargs):
+                return self._original_module._load_from_state_dict(
+                    *args, **kwargs
+                )
 
             def forward(self, *args, **kwargs):
                 return interjection.forward(name, *args, **kwargs)
 
         # Each alias gets its own call module so names and backward hooks stay
-        # distinct, while every alias wrapper owns the same original module.
+        # distinct, while every alias wrapper exposes the same original module.
         interjection.register(name, native_call)
         interjection.register_original_module(name, module)
         return _NameWrapper()
@@ -790,7 +839,6 @@ def interject_by_module_class_native(model: nn.Module,
         return add_interjection(
             observation_name,
             module,
-            is_root=is_root,
         )
 
     return add_recursively(model, is_root=True)

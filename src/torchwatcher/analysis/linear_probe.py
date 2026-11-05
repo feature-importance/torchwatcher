@@ -110,6 +110,7 @@ class LinearProbe(Analyser):
 
         self.num_classes = num_classes
         self.probes = nn.ModuleDict()
+        self._probe_names = {}
         self.optimisers = {}
         self.partial_optim = partial_optim
         self.criterion = criterion
@@ -145,7 +146,20 @@ class LinearProbe(Analyser):
         """Register a watched layer and create its corresponding probe."""
         super().register(name, module)
 
-        probe_name = f"{name.replace(".", "_")}_probe"
+        if name in self._probe_names:
+            return
+
+        preferred = f"{name.replace('.', '_')}_probe"
+        probe_name = preferred
+        if probe_name in self.probes:
+            probe_name = f"{preferred}__{name.encode('utf-8').hex()}"
+            suffix = 1
+            while probe_name in self.probes:
+                probe_name = (
+                    f"{preferred}__{name.encode('utf-8').hex()}_{suffix}"
+                )
+                suffix += 1
+        self._probe_names[name] = probe_name
         self.probes[probe_name] = nn.LazyLinear(self.num_classes)
         self.optimisers[name] = self.partial_optim(
             self.probes[probe_name].parameters())
@@ -161,7 +175,7 @@ class LinearProbe(Analyser):
         for this layer.
         """
 
-        probe_name = f"{name.replace(".", "_")}_probe"
+        probe_name = self._probe_names[name]
         x = state.outputs.reshape(state.outputs.shape[0], -1)
 
         probe = self.probes[probe_name]
