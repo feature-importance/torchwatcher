@@ -68,6 +68,39 @@ def test_wrapped_interjection_receives_underlying_module_for_module_call():
     )
 
 
+def test_qualified_module_names_treat_periods_literally():
+    class Nested(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.b = nn.ReLU()
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.a_b = nn.ReLU()
+            self.a = Nested()
+
+        def forward(self, inputs):
+            return self.a.b(self.a.b(self.a_b(inputs)))
+
+    analyser = NameAnalyser()
+    watched_model = interject_by_module_class(
+        Model(),
+        nn.ReLU,
+        analyser,
+    )
+    inputs = torch.tensor([-1.0, 2.0])
+
+    outputs = watched_model(inputs)
+
+    torch.testing.assert_close(outputs, torch.tensor([0.0, 2.0]))
+    assert analyser.to_dict() == {
+        "a_b": "a_b",
+        "a.b": "a.b",
+        "a.b_1": "a.b_1",
+    }
+
+
 def test_wrapped_backward_interjection_accepts_single_tensor_gradient():
     interjection = _ScaleBackward()
     watched_model = interject_by_module_class(

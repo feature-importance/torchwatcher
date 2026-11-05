@@ -72,6 +72,37 @@ def _get_name(model: Union[torch.nn.Module, Callable[..., Any]]) -> str:
 
 
 class HierarchyTracer(NodePathTracer):
+    def _get_node_qualname(
+            self, module_qualname: str, node: fx.Node) -> str:
+        """Build a torchvision-style name using literal path matching.
+
+        ``NodePathTracer`` uses an unescaped qualified name as a regular
+        expression when detecting duplicates. A path such as ``a.b`` can
+        therefore falsely match ``a_b`` and make its suffix parsing fail.
+        """
+        node_qualname = module_qualname
+        if node.op != "call_module":
+            if node_qualname:
+                node_qualname += "."
+            node_qualname += str(node)
+
+        base, separator, suffix = node_qualname.rpartition("_")
+        if separator and base and suffix.isdigit():
+            node_qualname = base
+
+        duplicate_prefix = f"{node_qualname}_"
+        for existing in reversed(self.node_to_qualname.values()):
+            if existing == node_qualname:
+                return f"{node_qualname}_1"
+            if existing.startswith(duplicate_prefix):
+                duplicate_suffix = existing[len(duplicate_prefix):]
+                if duplicate_suffix.isdigit():
+                    return (
+                        f"{node_qualname}_{int(duplicate_suffix) + 1}"
+                    )
+
+        return node_qualname
+
     def call_module(self, m, forward, args, kwargs):
         module_qualified_name = self.path_of_module(m)
         with ScopeContextManager(

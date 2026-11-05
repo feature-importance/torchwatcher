@@ -1186,7 +1186,7 @@ def sample_portion(vec, p=0.5):
     Quantile when the data gets very very large.
     """
     bits = torch.bernoulli(
-        torch.zeros(vec.shape[0], dtype=torch.uint8, device=vec.device), p
+        torch.zeros(vec.shape[0], dtype=torch.bool, device=vec.device), p
     )
     return vec[bits]
 
@@ -1510,7 +1510,7 @@ def load_cached_state(cachefile, args, quiet=False, throw=False):
         for a, v in args.items():
             if a not in dat or dat[a] != v:
                 if not quiet:
-                    print("%s %s changed from %s to %s" % (cachefile, a, dat[a], v))
+                    print("%s %s changed from %s to %s" % (cachefile, a, dat[a] if a in dat else "None", v))
                 return None
     except (FileNotFoundError, ValueError) as e:
         if throw:
@@ -1535,7 +1535,9 @@ def save_cached_state(cachefile, obj, args):
         cachefile.clear()
         cachefile.update(dat)
     else:
-        os.makedirs(os.path.dirname(cachefile), exist_ok=True)
+        dirname = os.path.dirname(cachefile)
+        if len(dirname)>0:
+          os.makedirs(dirname, exist_ok=True)
         numpy.savez(cachefile, **box_numpy_null(dat))
 
 
