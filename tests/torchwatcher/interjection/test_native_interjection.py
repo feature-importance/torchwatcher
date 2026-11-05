@@ -153,6 +153,56 @@ def test_native_shared_module_backward_hooks_remain_alias_specific():
     assert interjection.names == ["right", "left"]
 
 
+def test_native_backward_interjection_handles_keyword_input_gradients():
+    class MixedAdd(nn.Module):
+        def forward(self, left, *, right):
+            return left + right
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.add = MixedAdd()
+
+        def forward(self, left, right):
+            return self.add(left, right=right)
+
+    class ScaleInputGradients(WrappedForwardBackwardInterjection):
+        def __init__(self):
+            super().__init__()
+            self.grad_input = None
+
+        def process_backward(
+                self, name, module, grad_input, grad_output):
+            self.grad_input = grad_input
+            if not isinstance(grad_input, tuple) or len(grad_input) != 2:
+                return None
+            return grad_input[0] * 2, grad_input[1] * 3
+
+    interjection = ScaleInputGradients()
+    watched_model = interject_by_module_class_native(
+        Model(),
+        MixedAdd,
+        interjection,
+    )
+    left = torch.tensor([1.0], requires_grad=True)
+    right = torch.tensor([2.0], requires_grad=True)
+
+    watched_model(left, right).sum().backward()
+
+    assert isinstance(interjection.grad_input, tuple)
+    assert len(interjection.grad_input) == 2
+    torch.testing.assert_close(
+        interjection.grad_input[0],
+        torch.ones_like(left),
+    )
+    torch.testing.assert_close(
+        interjection.grad_input[1],
+        torch.ones_like(right),
+    )
+    torch.testing.assert_close(left.grad, torch.full_like(left, 2.0))
+    torch.testing.assert_close(right.grad, torch.full_like(right, 3.0))
+
+
 def test_native_interjection_mode_does_not_change_eval_model_operation():
     interjection = _RecordingWrappedInterjection()
     watched_model = interject_by_module_class_native(

@@ -1,6 +1,7 @@
 import copy
 import importlib
 import inspect
+from contextvars import ContextVar
 from typing import Type, Optional, Dict, Any, Union, Callable
 
 import math
@@ -23,6 +24,12 @@ from .interjection import (
 from .node_selector import NodeSelector, matches_module_class
 from ..nn import GradientIdentity
 from ..utils import preserve_training_modes
+
+
+_NativeCallSpec = tuple[int, tuple[str, ...]]
+_native_call_specs: ContextVar[
+    dict[int, tuple[_NativeCallSpec, ...]]
+] = ContextVar("_native_call_specs", default={})
 
 
 class DualGraphModule(nn.Module):
@@ -670,7 +677,36 @@ def interject_by_module_class_native(model: nn.Module,
                 # or let the interjection control the module lifecycle.
                 self._module = (module,)
 
-            def forward(self, *args, **kwargs):
+            def __call__(self, *args, **kwargs):
+                # Full backward hooks only receive gradients for positional
+                # inputs. Present keyword values positionally to the private
+                # hooked wrapper, then reconstruct the original call in
+                # forward. The context-local stack keeps recursive and
+                # concurrent calls independent.
+                module_id = id(self)
+                call_specs = _native_call_specs.get()
+                stack = call_specs.get(module_id, ())
+                spec = (len(args), tuple(kwargs))
+                token = _native_call_specs.set({
+                    **call_specs,
+                    module_id: (*stack, spec),
+                })
+                try:
+                    return super().__call__(*args, *kwargs.values())
+                finally:
+                    _native_call_specs.reset(token)
+
+            def forward(self, *flattened_args):
+                positional_count, keyword_names = (
+                    _native_call_specs.get()[id(self)][-1]
+                )
+                args = flattened_args[:positional_count]
+                keyword_values = flattened_args[positional_count:]
+                kwargs = dict(zip(
+                    keyword_names,
+                    keyword_values,
+                    strict=True,
+                ))
                 return self._module[0](*args, **kwargs)
 
         native_call = _NativeCall()
