@@ -392,3 +392,18 @@ def test_native_forward_interjection_adapter_can_be_pickled():
         restored(torch.tensor([-2.0, 3.0])),
         torch.tensor([5.0, 8.0]),
     )
+
+
+def test_native_backward_interjection_can_be_pickled():
+    watched_model = interject_by_module_class_native(
+        _SharedReLUModel(),
+        nn.ReLU,
+        _RecordingBackwardInterjection(),
+    )
+
+    restored = pickle.loads(pickle.dumps(watched_model))
+    inputs = torch.tensor([1.0], requires_grad=True)
+    restored(inputs).sum().backward()
+
+    interjection = restored.left._interjection
+    assert interjection.names == ["right", "left"]

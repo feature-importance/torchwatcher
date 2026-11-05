@@ -1,10 +1,31 @@
 import abc
+from functools import partial
 
 import torch
 import torch.nn as nn
 from torch.utils.hooks import RemovableHandle
 
 from torchwatcher.utils import unpack, unpack_call
+
+
+def _wrapped_backward_hook(
+        interjection,
+        name,
+        key,
+        _module,
+        grad_input,
+        grad_output,
+):
+    """Dispatch a registered full-backward hook to its interjection."""
+    processed = interjection.process_backward(
+        name,
+        interjection._original_modules[key],
+        unpack(grad_input),
+        unpack(grad_output),
+    )
+    if processed is None or isinstance(processed, tuple):
+        return processed
+    return (processed,)
 
 
 class Interjection(nn.Module, metaclass=abc.ABCMeta):
@@ -206,23 +227,35 @@ class WrappedForwardBackwardInterjection(WrappedForwardInterjection):
     def register(self, name: str, module: torch.fx.GraphModule | nn.Module):
         super().register(name, module)
         key = self._registration_key(name)
+        self._register_backward_hook(name, key, module)
 
-        def hook(_: nn.Module,
-                 grad_input: [tuple[torch.Tensor, ...] | torch.Tensor],
-                 grad_output: [tuple[torch.Tensor, ...] | torch.Tensor]) -> \
-                [tuple[torch.Tensor] | torch.Tensor | None]:
-            processed = self.process_backward(
-                name,
-                self._original_modules[key],
-                unpack(grad_input),
-                unpack(grad_output),
-            )
-            if processed is None or isinstance(processed, tuple):
-                return processed
-            return (processed,)
-
+    def _register_backward_hook(self, name, key, module):
+        hook = partial(_wrapped_backward_hook, self, name, key)
         self._handles[key] = module.register_full_backward_hook(hook)
 
+    def __getstate__(self):
+        state = super().__getstate__().copy()
+        # RemovableHandle stores weak references to the module hook mappings;
+        # serialising those mappings through the handle does not preserve their
+        # identity. Hooks are restored explicitly in __setstate__ instead.
+        state["_handles"] = {}
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._handles = {}
+        for key, module in self._wrapped.items():
+            for hook_id, hook in tuple(module._backward_hooks.items()):
+                if (
+                        isinstance(hook, partial)
+                        and hook.func is _wrapped_backward_hook
+                        and hook.args
+                        and hook.args[0] is self
+                ):
+                    del module._backward_hooks[hook_id]
+            name = key[0] if isinstance(key, tuple) else key
+            self._register_backward_hook(name, key, module)
+
     def __del__(self):
-        for handle in self._handles.values():
+        for handle in getattr(self, "_handles", {}).values():
             handle.remove()

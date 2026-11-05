@@ -1,3 +1,5 @@
+import pickle
+
 import torch
 import torch.nn.functional as F
 import pytest
@@ -872,6 +874,25 @@ def test_dual_graph_apply_visits_each_logical_module_once():
             operation.weight,
             torch.full_like(operation.weight, 3.0),
         )
+
+
+def test_wrapped_backward_interjection_can_be_pickled():
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        _RecordBackward(),
+    )
+
+    restored = pickle.loads(pickle.dumps(watched_model))
+    inputs = torch.ones(1, 2, requires_grad=True)
+    restored(inputs).sum().backward()
+
+    restored_interjection = next(
+        module
+        for module in restored.modules()
+        if isinstance(module, _RecordBackward)
+    )
+    assert restored_interjection.calls == 1
 
 
 def test_trace_rejects_mixed_mode_module_traced_through_by_fx():
