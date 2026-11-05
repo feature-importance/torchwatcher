@@ -53,6 +53,15 @@ class _SharedReLUModel(nn.Module):
         return self.right(self.left(inputs))
 
 
+class _NestedSharedReLUModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.block = _SharedReLUModel()
+
+    def forward(self, inputs):
+        return self.block(inputs)
+
+
 def test_native_forward_interjection_observes_and_replaces_module_output():
     model = nn.Sequential(nn.ReLU())
     interjection = _RecordingReplacement()
@@ -391,6 +400,26 @@ def test_native_interjection_apply_visits_shared_original_module_once():
     ]
 
 
+def test_native_interjection_apply_deduplicates_intermediate_subtree():
+    watched_model = interject_by_module_class_native(
+        _NestedSharedReLUModel(),
+        nn.ReLU,
+        _RecordingWrappedInterjection(),
+    )
+    visited = []
+
+    for _ in range(2):
+        watched_model.block.apply(
+            lambda module: visited.append(module)
+            if isinstance(module, nn.ReLU) else None
+        )
+
+    assert visited == [
+        watched_model.block.left._original_module,
+        watched_model.block.left._original_module,
+    ]
+
+
 def test_native_interjection_apply_preserves_child_first_order():
     watched_model = interject_by_module_class_native(
         _NestedTarget(_NestedTarget()),
@@ -425,19 +454,19 @@ def test_native_interjected_model_can_be_pickled():
 
 def test_native_interjection_apply_deduplication_survives_pickling():
     watched_model = interject_by_module_class_native(
-        _SharedReLUModel(),
+        _NestedSharedReLUModel(),
         nn.ReLU,
         _RecordingWrappedInterjection(),
     )
 
     restored = pickle.loads(pickle.dumps(watched_model))
     visited = []
-    restored.apply(
+    restored.block.apply(
         lambda module: visited.append(module)
         if isinstance(module, nn.ReLU) else None
     )
 
-    assert visited == [restored.left._original_module]
+    assert visited == [restored.block.left._original_module]
 
 
 def test_native_forward_interjection_adapter_can_be_pickled():

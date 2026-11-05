@@ -1050,11 +1050,7 @@ def interject_by_module_class_native(model: nn.Module,
     if isinstance(interjection, ForwardInterjection):
         interjection = _NativeForwardInterjection(interjection)
 
-    has_interjection = False
-
     def add_interjection(name, module):
-        nonlocal has_interjection
-        has_interjection = True
         native_call = _NativeCall(module)
 
         # Each alias gets its own call module so names and backward hooks stay
@@ -1064,15 +1060,17 @@ def interject_by_module_class_native(model: nn.Module,
         return _NativeInterjectionWrapper(name, module, interjection)
 
     traversed: set[int] = set()
+    contains_interjection: dict[int, bool] = {}
 
     def add_recursively(
             module: nn.Module,
             name: str = "",
             *,
             is_root: bool = False,
-    ) -> nn.Module:
+    ) -> tuple[nn.Module, bool]:
         module_id = id(module)
         is_target = isinstance(module, target_module_class)
+        subtree_contains_interjection = is_target
         if module_id not in traversed:
             traversed.add(module_id)
             for child_name, child in list(module._modules.items()):
@@ -1081,22 +1079,35 @@ def interject_by_module_class_native(model: nn.Module,
                 qualified_name = (
                     f"{name}.{child_name}" if name else child_name
                 )
-                replacement = add_recursively(child, qualified_name)
+                replacement, child_contains_interjection = add_recursively(
+                    child,
+                    qualified_name,
+                )
+                subtree_contains_interjection |= child_contains_interjection
                 if replacement is not child:
                     setattr(module, child_name, replacement)
+            contains_interjection[module_id] = subtree_contains_interjection
+        else:
+            subtree_contains_interjection = contains_interjection.get(
+                module_id,
+                is_target,
+            )
 
         if not is_target:
-            return module
+            if (
+                    subtree_contains_interjection
+                    and not isinstance(
+                        module.__dict__.get("apply"),
+                        _NativeApply,
+                    )
+            ):
+                module.apply = _NativeApply(module)
+            return module, subtree_contains_interjection
         observation_name = root_name if is_root else name
-        return add_interjection(
-            observation_name,
-            module,
+        return (
+            add_interjection(observation_name, module),
+            True,
         )
 
-    model = add_recursively(model, is_root=True)
-    if has_interjection and not isinstance(
-            model,
-            _NativeInterjectionWrapper,
-    ):
-        model.apply = _NativeApply(model)
+    model, _ = add_recursively(model, is_root=True)
     return model
