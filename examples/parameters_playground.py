@@ -72,7 +72,7 @@ def _(nn, resnet18, sel):
     from torchwatcher.logging import InMemorySink
     from torchwatcher.training import EveryNSteps, ParameterTracker
     from torchbearer import Trial
-    from torchvision.datasets import CIFAR10
+    from torchvision.datasets import MNIST
     from torchvision.transforms import ToTensor, Compose
     import torchvision.transforms.v2 as v2
 
@@ -80,24 +80,23 @@ def _(nn, resnet18, sel):
 
     sink = InMemorySink()
     tracker = ParameterTracker(
-        sel.matches_module_name("conv1") & sel.is_weight,
+        sel.is_weight,
         {
             "update_norm": lambda step, info, state: step.norm(),
             "gradient_norm": lambda step, info, state: info.parameter.grad.norm(),
         },
         sink,
-        schedule=EveryNSteps(100),
+        schedule=EveryNSteps(10),
         event="optimizer_step"
     )
 
-    data = CIFAR10(root="/Users/jsh2/Data/", train=True, transform=Compose([ToTensor(), v2.RGB()]))
+    data = MNIST(root="/Users/jsh2/Data/", train=True, transform=Compose([ToTensor(), v2.RGB()]))
     loader = torch.utils.data.DataLoader(data, shuffle=True, batch_size=32)
 
     optim = torch.optim.Adam(sel.is_weight.parameters(model2), 0.001)
     trial = Trial(model2, optim, nn.CrossEntropyLoss(), metrics=["acc"], callbacks=[tracker]).to("mps")
-    trial.with_train_generator(loader).run(10)
+    trial.with_train_generator(loader).run(4)
     return (
-        CIFAR10,
         Compose,
         EveryNSteps,
         InMemorySink,
@@ -124,13 +123,38 @@ def _(frame, path_contains):
     import matplotlib.pyplot as plt
     import seaborn as sns
 
-    plt.figure()
-    sns.lineplot(path_contains(frame, ["update_norm"]), x="global_step", y="value")
-    plt.show()
+    # plt.figure()
+    # sns.lineplot(path_contains(frame, ["update_norm"]), x="global_step", y="value")
+    # plt.show()
 
-    plt.figure()
-    sns.lineplot(path_contains(frame, ["gradient_norm"]), x="global_step", y="value")
-    plt.show()
+    # plt.figure()
+    # sns.lineplot(path_contains(frame, ["gradient_norm"]), x="global_step", y="value")
+    # plt.show()
+
+    max_grad = path_contains(frame, ["gradient_norm"])['value'].max()
+    max_update = path_contains(frame, ["update_norm"])['value'].max()
+
+    layers = set([i[:-1] for i in frame['path'].unique()])
+    for layer in layers:
+        fig, ax1 = plt.subplots()
+
+        color = 'tab:red'
+        ax1.set_title('.'.join(layer))
+        ax1.set_xlabel('step')
+        ax1.set_ylabel('gradient_norm', color=color)
+        ax1.set_ylim(0, max_grad)
+        sns.lineplot(path_contains(frame, [*layer, "gradient_norm"]), x="global_step", y="value", color=color, ax=ax1)
+        ax1.tick_params(axis='y', labelcolor=color)
+    
+        ax2 = ax1.twinx()  # instantiate a second Axes that shares the same x-axis
+        ax2.set_ylim(0, max_update)
+        color = 'tab:blue'
+        ax2.set_ylabel('update_norm', color=color)  # we already handled the x-label with ax1
+        sns.lineplot(path_contains(frame, [*layer, "update_norm"]), x="global_step", y="value", color=color, ax=ax2)
+        ax2.tick_params(axis='y', labelcolor=color)
+    
+        fig.tight_layout()  # otherwise the right y-label is slightly clipped
+        plt.show()
     return
 
 
@@ -157,7 +181,7 @@ def _(
         base = resnet18()
         data = CIFAR10(root="/Users/jsh2/Data/", train=True, transform=Compose([ToTensor(), v2.RGB()]))
         loader = torch.utils.data.DataLoader(data, shuffle=False, batch_size=32)
-    
+
         sink = InMemorySink()
         tracker = ParameterTracker(
             sel.matches_module_name("conv1") & sel.is_weight,
@@ -171,11 +195,11 @@ def _(
         optim = torch.optim.Adam(sel.is_weight.parameters(model), 0.001)
         trial = Trial(model, optim, nn.CrossEntropyLoss(), metrics=["acc"], callbacks=[tracker]).to("mps")
         trial.with_train_generator(loader).run(epochs)
-    
-    
+
+
         model = deepcopy(base).to('mps')
         optim = torch.optim.Adam(sel.is_weight.parameters(model), 0.001)
-    
+
         trace = []
         counter = 1
         for epoch in range(epochs):
@@ -184,14 +208,14 @@ def _(
                 pred = model(X.to('mps'))
                 loss = nn.functional.cross_entropy(pred, y.to('mps'))
                 loss.backward()
-    
+
                 before = model.conv1.weight.clone()
                 optim.step()
                 after = model.conv1.weight.clone()
-    
+
                 if counter % steps == 0:
                     trace.append((after.detach() - before.detach()).norm().cpu().item())
-            
+        
                 counter +=1
 
         return observations_to_dataframe(sink.observations)['value'], trace

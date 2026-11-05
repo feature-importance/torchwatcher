@@ -328,6 +328,37 @@ def preferred_name(node: fx.Node) -> str:
     return node.name
 
 
+def _copy_module_structure(
+        module: nn.Module,
+        memo: dict[int, nn.Module] | None = None,
+) -> nn.Module:
+    """Copy a module hierarchy while retaining its parameters and buffers.
+
+    Wrapped train and eval operations need independent module objects so that
+    every descendant can retain its own ``training`` flag. Parameter and
+    buffer registration dictionaries deliberately remain shared, preserving
+    optimizer state and mutable buffers such as BatchNorm running statistics.
+    """
+    if memo is None:
+        memo = {}
+
+    module_id = id(module)
+    if module_id in memo:
+        return memo[module_id]
+
+    copied = copy.copy(module)
+    memo[module_id] = copied
+    copied._modules = {
+        name: (
+            None
+            if child is None
+            else _copy_module_structure(child, memo)
+        )
+        for name, child in module._modules.items()
+    }
+    return copied
+
+
 def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
                         interjection: Interjection,
                         training: bool):
@@ -357,7 +388,9 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
         # Each traced mode needs its own module object so that the wrapped train
         # and eval operations can retain independent training flags. Parameters
         # and buffers remain shared with the original module.
-        module = copy.copy(graph_module.get_submodule(node.target))
+        module = _copy_module_structure(
+            graph_module.get_submodule(node.target)
+        )
         graph_module.set_submodule(node.target, module)
     if requires_out_of_place:
         node = handle_inplace(graph_module, node)

@@ -533,6 +533,151 @@ def test_analyser_mode_does_not_change_wrapped_module_operation(
     assert analyser.training is analyser_training
 
 
+class _CompositeDropout(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.dropout = nn.Dropout(p=1.0)
+
+    def forward(self, inputs):
+        return self.dropout(inputs)
+
+
+def test_wrapped_composite_leaf_retains_descendant_modes():
+    analyser = NameAnalyser()
+    watched_model = interject_by_module_class(
+        nn.Sequential(_CompositeDropout()),
+        _CompositeDropout,
+        analyser,
+    )
+    inputs = torch.ones(4)
+
+    watched_model.train()
+    analyser.eval()
+    torch.testing.assert_close(
+        watched_model(inputs),
+        torch.zeros_like(inputs),
+    )
+
+    watched_model.eval()
+    analyser.train()
+    torch.testing.assert_close(watched_model(inputs), inputs)
+
+
+class _CompositeBatchNorm(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.batch_norm = nn.BatchNorm1d(2)
+
+    def forward(self, inputs):
+        return self.batch_norm(inputs)
+
+
+def test_wrapped_composite_leaf_shares_parameters_and_buffers():
+    source = nn.Sequential(_CompositeBatchNorm())
+    analyser = NameAnalyser()
+    watched_model = interject_by_module_class(
+        source,
+        _CompositeBatchNorm,
+        analyser,
+    )
+    train_operation = analyser.interjection.wrapped_module(
+        "0",
+        training=True,
+    ).get_submodule("0")
+    eval_operation = analyser.interjection.wrapped_module(
+        "0",
+        training=False,
+    ).get_submodule("0")
+
+    assert train_operation is not eval_operation
+    assert train_operation.batch_norm is not eval_operation.batch_norm
+    assert (
+        train_operation.batch_norm.weight
+        is eval_operation.batch_norm.weight
+        is source[0].batch_norm.weight
+    )
+    assert (
+        train_operation.batch_norm.running_mean
+        is eval_operation.batch_norm.running_mean
+        is source[0].batch_norm.running_mean
+    )
+
+    watched_model.train()
+    watched_model(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+
+    assert source[0].batch_norm.num_batches_tracked.item() == 1
+    torch.testing.assert_close(
+        eval_operation.batch_norm.running_mean,
+        source[0].batch_norm.running_mean,
+    )
+
+
+class _CompositeLinear(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(1, 1, bias=False)
+        self.linear.weight.data.fill_(1.0)
+
+    def forward(self, inputs):
+        return self.linear(inputs)
+
+
+def test_wrapped_composite_leaf_optimizer_update_is_shared_between_modes():
+    source = nn.Sequential(_CompositeLinear())
+    analyser = NameAnalyser()
+    watched_model = interject_by_module_class(
+        source,
+        _CompositeLinear,
+        analyser,
+    )
+    optimiser = torch.optim.SGD(watched_model.parameters(), lr=0.1)
+    inputs = torch.ones(1, 1)
+
+    watched_model.train()
+    watched_model(inputs).sum().backward()
+    optimiser.step()
+    watched_model.eval()
+
+    torch.testing.assert_close(
+        watched_model(inputs),
+        torch.tensor([[0.9]]),
+    )
+    torch.testing.assert_close(source(inputs), torch.tensor([[0.9]]))
+
+
+class _CompositeAlias(nn.Module):
+    def __init__(self):
+        super().__init__()
+        shared = nn.Linear(1, 1)
+        self.left = shared
+        self.right = shared
+
+    def forward(self, inputs):
+        return self.right(self.left(inputs))
+
+
+def test_wrapped_composite_leaf_preserves_descendant_aliases():
+    analyser = NameAnalyser()
+    interject_by_module_class(
+        nn.Sequential(_CompositeAlias()),
+        _CompositeAlias,
+        analyser,
+    )
+    train_operation = analyser.interjection.wrapped_module(
+        "0",
+        training=True,
+    ).get_submodule("0")
+    eval_operation = analyser.interjection.wrapped_module(
+        "0",
+        training=False,
+    ).get_submodule("0")
+
+    assert train_operation.left is train_operation.right
+    assert eval_operation.left is eval_operation.right
+    assert train_operation.left is not eval_operation.left
+    assert train_operation.left.weight is eval_operation.left.weight
+
+
 def test_drawing_resolves_mode_aware_analyser_interjection():
     watched_model = interject_by_name(
         nn.Sequential(nn.ReLU()),
