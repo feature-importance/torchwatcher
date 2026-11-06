@@ -117,7 +117,7 @@ def _dual_graph_load_state_dict_pre_hook(
         prefix,
         _local_metadata,
         _strict,
-        _missing_keys,
+        missing_keys,
         _unexpected_keys,
         _error_messages,
 ):
@@ -132,7 +132,6 @@ def _dual_graph_load_state_dict_pre_hook(
         key.startswith(_TORCHWATCHER_STATE_PREFIX)
         for key in relative_keys
     )
-
     for graph_name in ("train_module", "eval_module"):
         graph_module = getattr(module, graph_name)
         for key, value in graph_module.state_dict().items():
@@ -153,6 +152,13 @@ def _dual_graph_load_state_dict_pre_hook(
                 if graph_key not in state_dict:
                     state_dict[graph_key] = state_dict[supplied_keys[-1]]
                 translated_keys.update(supplied_keys)
+                for checkpoint_name in checkpoint_names:
+                    checkpoint_key = f"{prefix}{checkpoint_name}"
+                    if (
+                            checkpoint_key not in state_dict
+                            and checkpoint_key not in missing_keys
+                    ):
+                        missing_keys.append(checkpoint_key)
             elif (
                     is_source_checkpoint
                     and checkpoint_names[0].startswith(
@@ -172,6 +178,53 @@ def _dual_graph_load_state_dict_pre_hook(
 
     for key in translated_keys:
         del state_dict[key]
+
+
+def _dual_graph_load_state_dict_post_hook(module, incompatible_keys):
+    """Expose load diagnostics in the public checkpoint namespace."""
+    translations = []
+    for graph_name in ("train_module", "eval_module"):
+        graph_module = getattr(module, graph_name)
+        for state_name in graph_module.state_dict():
+            internal_name = f"{graph_name}.{state_name}"
+            checkpoint_names = _dual_graph_checkpoint_names(
+                module,
+                graph_name,
+                state_name,
+            )
+            translations.append((internal_name, checkpoint_names))
+
+    def translate(keys):
+        translated = []
+        for key in keys:
+            replacements = None
+            outer_prefix = ""
+            for internal_name, checkpoint_names in translations:
+                if key == internal_name:
+                    replacements = checkpoint_names
+                    break
+                suffix = f".{internal_name}"
+                if key.endswith(suffix):
+                    outer_prefix = key[:-len(internal_name)]
+                    replacements = checkpoint_names
+                    break
+            if replacements is None:
+                replacements = (key,)
+            else:
+                replacements = tuple(
+                    f"{outer_prefix}{name}" for name in replacements
+                )
+            for replacement in replacements:
+                if replacement not in translated:
+                    translated.append(replacement)
+        return translated
+
+    incompatible_keys.missing_keys[:] = translate(
+        incompatible_keys.missing_keys
+    )
+    incompatible_keys.unexpected_keys[:] = translate(
+        incompatible_keys.unexpected_keys
+    )
 
 
 def _build_dual_graph_state_mapping(
@@ -225,6 +278,9 @@ class DualGraphModule(nn.Module):
         self.register_state_dict_post_hook(_dual_graph_state_dict_hook)
         self.register_load_state_dict_pre_hook(
             _dual_graph_load_state_dict_pre_hook
+        )
+        self.register_load_state_dict_post_hook(
+            _dual_graph_load_state_dict_post_hook
         )
 
     @property

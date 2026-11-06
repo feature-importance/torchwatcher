@@ -1090,6 +1090,64 @@ def test_nested_dual_graph_checkpoint_uses_logical_names():
     )
 
 
+def test_dual_graph_load_diagnostics_use_logical_names():
+    watched_model = trace(nn.Sequential(nn.Linear(2, 1)))
+
+    incompatible = watched_model.load_state_dict({}, strict=False)
+
+    assert incompatible.missing_keys == ["0.weight", "0.bias"]
+    assert incompatible.unexpected_keys == []
+
+
+def test_interjected_load_diagnostics_use_original_names():
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        _ModuleRecorder(),
+    )
+
+    incompatible = watched_model.load_state_dict({}, strict=False)
+
+    assert incompatible.missing_keys == ["0.weight", "0.bias"]
+    assert incompatible.unexpected_keys == []
+
+
+def test_nested_dual_graph_load_diagnostics_preserve_outer_prefix():
+    model = nn.Module()
+    model.watched = trace(nn.Sequential(nn.Linear(2, 1)))
+
+    incompatible = model.load_state_dict({}, strict=False)
+
+    assert incompatible.missing_keys == [
+        "watched.0.weight",
+        "watched.0.bias",
+    ]
+
+
+def test_partial_shared_alias_checkpoint_reports_original_missing_alias():
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            shared = nn.Linear(2, 2)
+            self.left = shared
+            self.right = shared
+
+        def forward(self, inputs):
+            return self.right(self.left(inputs))
+
+    watched_model = interject_by_module_class(
+        Model(),
+        nn.Linear,
+        _ModuleRecorder(),
+    )
+    checkpoint = watched_model.state_dict()
+    del checkpoint["right.weight"]
+
+    incompatible = watched_model.load_state_dict(checkpoint, strict=False)
+
+    assert incompatible.missing_keys == ["right.weight"]
+
+
 def test_wrapped_backward_interjection_can_be_pickled():
     watched_model = interject_by_module_class(
         nn.Sequential(nn.Linear(2, 1)),
