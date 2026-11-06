@@ -33,6 +33,15 @@ class _ModuleRecorder(WrappedForwardInterjection):
         self.outputs.append(outputs)
 
 
+class _StatefulInterjection(WrappedForwardInterjection):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("marker", torch.tensor(3.0))
+
+    def process(self, name, module, inputs, outputs):
+        pass
+
+
 class _ScaleBackward(WrappedForwardBackwardInterjection):
     def process_backward(self, name, module, grad_input, grad_output):
         return grad_input * 2
@@ -939,6 +948,120 @@ def test_dual_graph_checkpoint_uses_logical_names_and_loads_strictly():
             watched_model(inputs),
             restored(inputs),
         )
+
+
+def test_interjected_checkpoint_uses_original_model_state_names():
+    source = nn.Sequential(nn.Linear(2, 1))
+    watched_model = interject_by_module_class(
+        source,
+        nn.Linear,
+        _ModuleRecorder(),
+    )
+    replacement_state = {
+        "0.weight": torch.full((1, 2), 3.0),
+        "0.bias": torch.full((1,), 4.0),
+    }
+
+    assert list(watched_model.state_dict()) == list(source.state_dict())
+    watched_model.load_state_dict(replacement_state, strict=True)
+
+    for training in (True, False):
+        watched_model.train(training)
+        torch.testing.assert_close(
+            watched_model(torch.ones(1, 2)),
+            torch.full((1, 1), 10.0),
+        )
+
+    restored = nn.Sequential(nn.Linear(2, 1))
+    restored.load_state_dict(watched_model.state_dict(), strict=True)
+    torch.testing.assert_close(
+        restored(torch.ones(1, 2)),
+        torch.full((1, 1), 10.0),
+    )
+
+
+def test_interjected_checkpoint_uses_original_buffer_names():
+    source = nn.Sequential(nn.BatchNorm1d(2))
+    watched_model = interject_by_module_class(
+        source,
+        nn.BatchNorm1d,
+        _ModuleRecorder(),
+    )
+    checkpoint = {
+        name: value.clone()
+        for name, value in source.state_dict().items()
+    }
+    checkpoint["0.running_mean"].fill_(5.0)
+
+    assert list(watched_model.state_dict()) == list(source.state_dict())
+    watched_model.load_state_dict(checkpoint, strict=True)
+
+    torch.testing.assert_close(
+        watched_model.state_dict()["0.running_mean"],
+        torch.full((2,), 5.0),
+    )
+
+
+def test_interjected_checkpoint_preserves_original_shared_alias_names():
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            shared = nn.Linear(2, 2)
+            self.left = shared
+            self.right = shared
+
+        def forward(self, inputs):
+            return self.right(self.left(inputs))
+
+    source = Model()
+    watched_model = interject_by_module_class(
+        source,
+        nn.Linear,
+        _ModuleRecorder(),
+    )
+
+    assert set(watched_model.state_dict()) == set(source.state_dict())
+    watched_model.load_state_dict(source.state_dict(), strict=True)
+
+
+def test_original_checkpoint_keeps_auxiliary_interjection_state_initialized():
+    source = nn.Sequential(nn.Linear(2, 1))
+    interjection = _StatefulInterjection()
+    watched_model = interject_by_module_class(
+        source,
+        nn.Linear,
+        interjection,
+    )
+
+    watched_model.load_state_dict(source.state_dict(), strict=True)
+
+    torch.testing.assert_close(interjection.marker, torch.tensor(3.0))
+
+
+def test_full_checkpoint_restores_namespaced_interjection_state():
+    interjection = _StatefulInterjection()
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        interjection,
+    )
+    checkpoint = {
+        name: value.clone()
+        for name, value in watched_model.state_dict().items()
+    }
+    auxiliary_names = [
+        name
+        for name in checkpoint
+        if name.startswith("_torchwatcher.")
+    ]
+
+    assert auxiliary_names == [
+        "_torchwatcher._StatefulInterjection0.marker"
+    ]
+    interjection.marker.fill_(9.0)
+    watched_model.load_state_dict(checkpoint, strict=True)
+
+    torch.testing.assert_close(interjection.marker, torch.tensor(3.0))
 
 
 def test_nested_dual_graph_checkpoint_uses_logical_names():

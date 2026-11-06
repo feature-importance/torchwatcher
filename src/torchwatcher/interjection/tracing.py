@@ -34,6 +34,36 @@ _native_apply_modules: ContextVar[Optional[set[int]]] = ContextVar(
     "_native_apply_modules",
     default=None,
 )
+_TORCHWATCHER_STATE_PREFIX = "_torchwatcher."
+
+
+def _state_objects(module: nn.Module) -> dict[str, torch.Tensor]:
+    """Return persistent parameter and buffer registrations by state name."""
+    state_names = set(module.state_dict())
+    objects = {
+        name: parameter
+        for name, parameter in module.named_parameters(
+            remove_duplicate=False,
+        )
+        if name in state_names
+    }
+    objects.update({
+        name: buffer
+        for name, buffer in module.named_buffers(remove_duplicate=False)
+        if name in state_names
+    })
+    return objects
+
+
+def _dual_graph_checkpoint_names(module, graph_name, state_name):
+    source_names = module._graph_state_to_source.get(
+        (graph_name, state_name),
+    )
+    if source_names is not None:
+        return source_names
+    if state_name.split(".", 1)[0] in module._auxiliary_module_names:
+        return (f"{_TORCHWATCHER_STATE_PREFIX}{state_name}",)
+    return (state_name,)
 
 
 def _dual_graph_state_dict_hook(
@@ -48,9 +78,15 @@ def _dual_graph_state_dict_hook(
         for key in tuple(state_dict):
             if not key.startswith(graph_prefix):
                 continue
-            logical_key = f"{prefix}{key[len(graph_prefix):]}"
-            if logical_key not in state_dict:
-                state_dict[logical_key] = state_dict[key]
+            state_name = key[len(graph_prefix):]
+            for checkpoint_name in _dual_graph_checkpoint_names(
+                    module,
+                    graph_name,
+                    state_name,
+            ):
+                logical_key = f"{prefix}{checkpoint_name}"
+                if logical_key not in state_dict:
+                    state_dict[logical_key] = state_dict[key]
             del state_dict[key]
 
     metadata = getattr(state_dict, "_metadata", None)
@@ -87,24 +123,89 @@ def _dual_graph_load_state_dict_pre_hook(
 ):
     """Expand logical checkpoint keys for each mode graph that owns them."""
     translated_keys = set()
+    relative_keys = {
+        key[len(prefix):]
+        for key in state_dict
+        if key.startswith(prefix)
+    }
+    is_source_checkpoint = not any(
+        key.startswith(_TORCHWATCHER_STATE_PREFIX)
+        for key in relative_keys
+    )
+
     for graph_name in ("train_module", "eval_module"):
         graph_module = getattr(module, graph_name)
-        for key in graph_module.state_dict():
-            logical_key = f"{prefix}{key}"
-            if logical_key not in state_dict:
-                continue
+        for key, value in graph_module.state_dict().items():
+            checkpoint_names = _dual_graph_checkpoint_names(
+                module,
+                graph_name,
+                key,
+            )
+            supplied_keys = [
+                f"{prefix}{checkpoint_name}"
+                for checkpoint_name in checkpoint_names
+                if f"{prefix}{checkpoint_name}" in state_dict
+            ]
             graph_key = f"{prefix}{graph_name}.{key}"
-            if graph_key not in state_dict:
-                state_dict[graph_key] = state_dict[logical_key]
-            translated_keys.add(logical_key)
+            if supplied_keys:
+                # Shared aliases are loaded in source traversal order, so the
+                # final alias has the same precedence as nn.Module loading.
+                if graph_key not in state_dict:
+                    state_dict[graph_key] = state_dict[supplied_keys[-1]]
+                translated_keys.update(supplied_keys)
+            elif (
+                    is_source_checkpoint
+                    and checkpoint_names[0].startswith(
+                        _TORCHWATCHER_STATE_PREFIX
+                    )
+                    and graph_key not in state_dict
+            ):
+                # An original checkpoint intentionally has no analyser state.
+                # Preserve the analyser's current initialization.
+                state_dict[graph_key] = value
+
+    if is_source_checkpoint:
+        for source_name in module._source_state_names:
+            source_key = f"{prefix}{source_name}"
+            if source_key in state_dict:
+                translated_keys.add(source_key)
 
     for key in translated_keys:
         del state_dict[key]
 
 
+def _build_dual_graph_state_mapping(
+        source_module,
+        train_module,
+        eval_module,
+):
+    if source_module is None:
+        return frozenset(), {}
+
+    source_objects = _state_objects(source_module)
+    source_names_by_id: dict[int, list[str]] = {}
+    for name, value in source_objects.items():
+        source_names_by_id.setdefault(id(value), []).append(name)
+
+    graph_to_source = {}
+    for graph_name, graph_module in (
+            ("train_module", train_module),
+            ("eval_module", eval_module),
+    ):
+        for state_name, value in _state_objects(graph_module).items():
+            source_names = source_names_by_id.get(id(value))
+            if source_names:
+                graph_to_source[(graph_name, state_name)] = tuple(
+                    source_names
+                )
+
+    return frozenset(source_module.state_dict()), graph_to_source
+
+
 class DualGraphModule(nn.Module):
     def __init__(self, train_module: nn.Module, eval_module: nn.Module,
-                 class_name="DualGraphModule"):
+                 class_name="DualGraphModule", source_module=None,
+                 auxiliary_module_names=()):
         super().__init__()
 
         # This is a per-instance label used by drawing and diagnostics. Renaming
@@ -112,6 +213,15 @@ class DualGraphModule(nn.Module):
         self.graph_name = class_name
         self.train_module = train_module
         self.eval_module = eval_module
+        (
+            self._source_state_names,
+            self._graph_state_to_source,
+        ) = _build_dual_graph_state_mapping(
+            source_module,
+            train_module,
+            eval_module,
+        )
+        self._auxiliary_module_names = frozenset(auxiliary_module_names)
         self.register_state_dict_post_hook(_dual_graph_state_dict_hook)
         self.register_load_state_dict_pre_hook(
             _dual_graph_load_state_dict_pre_hook
@@ -575,7 +685,7 @@ def _copy_module_structure(
 
 def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
                         interjection: Interjection,
-                        training: bool):
+                        training: bool) -> str:
     """Insert an interjection into the traced module at a given node. If the
     interjection is of the wrapped type, then the node is replaced with
     interjection (which wraps the original node); otherwise the new node is
@@ -657,6 +767,8 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
             node.replace_all_uses_with(new_node)
             new_node.replace_input_with(new_node, node)
 
+    return interjection_name
+
 
 def interject_by_module_class(model: nn.Module,
                               target_module_class: Type[nn.Module],
@@ -720,6 +832,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
 
     with preserve_training_modes(model):
         graphmodules = {}
+        auxiliary_module_names = set()
         for mode in ["train", "eval"]:
             if mode == "train":
                 model.train()
@@ -729,12 +842,13 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
             traced = symbolic_trace(model, tracer_kwargs=tracer_kwargs)
             for node in traced.graph.nodes:
                 if selector is not None and selector.fn((traced, node)):
-                    insert_interjection(
+                    interjection_name = insert_interjection(
                         traced,
                         node,
                         interjection,
                         training=mode == "train",
                     )
+                    auxiliary_module_names.add(interjection_name)
 
             traced.graph.eliminate_dead_code()
             traced.delete_all_unused_submodules()
@@ -746,6 +860,8 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
             graphmodules["train"],
             graphmodules["eval"],
             class_name="DualGraphModule_" + _get_name(model),
+            source_module=model,
+            auxiliary_module_names=auxiliary_module_names,
         )
         graph_module.train(is_training)
 

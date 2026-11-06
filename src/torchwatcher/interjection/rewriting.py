@@ -153,6 +153,7 @@ def replace(model: nn.Module, selector: NodeSelector,
             graphmodules["train"],
             graphmodules["eval"],
             class_name="DualGraphModule_" + _get_name(model),
+            source_module=model,
         )
         graph_module.train(is_training)
 
