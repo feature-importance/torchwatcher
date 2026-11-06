@@ -122,6 +122,10 @@ def _dual_graph_load_state_dict_pre_hook(
         _error_messages,
 ):
     """Expand logical checkpoint keys for each mode graph that owns them."""
+    module.__dict__.setdefault(
+        "_torchwatcher_load_state_dict_prefixes",
+        [],
+    ).append(prefix)
     translated_keys = set()
     relative_keys = {
         key[len(prefix):]
@@ -182,7 +186,12 @@ def _dual_graph_load_state_dict_pre_hook(
 
 def _dual_graph_load_state_dict_post_hook(module, incompatible_keys):
     """Expose load diagnostics in the public checkpoint namespace."""
-    translations = []
+    prefixes = module.__dict__["_torchwatcher_load_state_dict_prefixes"]
+    prefix = prefixes.pop()
+    if not prefixes:
+        del module.__dict__["_torchwatcher_load_state_dict_prefixes"]
+
+    translations = {}
     for graph_name in ("train_module", "eval_module"):
         graph_module = getattr(module, graph_name)
         for state_name in graph_module.state_dict():
@@ -192,27 +201,21 @@ def _dual_graph_load_state_dict_post_hook(module, incompatible_keys):
                 graph_name,
                 state_name,
             )
-            translations.append((internal_name, checkpoint_names))
+            translations[internal_name] = checkpoint_names
 
     def translate(keys):
         translated = []
         for key in keys:
-            replacements = None
-            outer_prefix = ""
-            for internal_name, checkpoint_names in translations:
-                if key == internal_name:
-                    replacements = checkpoint_names
-                    break
-                suffix = f".{internal_name}"
-                if key.endswith(suffix):
-                    outer_prefix = key[:-len(internal_name)]
-                    replacements = checkpoint_names
-                    break
-            if replacements is None:
+            if not key.startswith(prefix):
                 replacements = (key,)
             else:
-                replacements = tuple(
-                    f"{outer_prefix}{name}" for name in replacements
+                checkpoint_names = translations.get(key[len(prefix):])
+                replacements = (
+                    (key,)
+                    if checkpoint_names is None
+                    else tuple(
+                        f"{prefix}{name}" for name in checkpoint_names
+                    )
                 )
             for replacement in replacements:
                 if replacement not in translated:

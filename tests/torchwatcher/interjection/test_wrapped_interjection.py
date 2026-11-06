@@ -1124,6 +1124,22 @@ def test_nested_dual_graph_load_diagnostics_preserve_outer_prefix():
     ]
 
 
+def test_dual_graph_load_diagnostics_do_not_rewrite_sibling_paths():
+    model = nn.Module()
+    model.sibling = nn.Module()
+    model.sibling.train_module = nn.Sequential(nn.Linear(2, 1))
+    model.watched = trace(nn.Sequential(nn.Linear(2, 1)))
+
+    incompatible = model.load_state_dict({}, strict=False)
+
+    assert incompatible.missing_keys == [
+        "sibling.train_module.0.weight",
+        "sibling.train_module.0.bias",
+        "watched.0.weight",
+        "watched.0.bias",
+    ]
+
+
 def test_partial_shared_alias_checkpoint_reports_original_missing_alias():
     class Model(nn.Module):
         def __init__(self):
