@@ -969,14 +969,14 @@ class Quantile(Stat):
             extremes=(
                 None
                 if self.extremes is None
-                else self.extremes.cpu().detach().numpy()
+                else _to_numpy(self.extremes)
             ),
             size=self.count,
             batchcount=self.batchcount,
         )
         if self.data is not None:
             for i, (d, f) in enumerate(zip(self.data, self.firstfree)):
-                state[f"data.{i}"] = d.cpu().detach().numpy()[:, :f].T
+                state[f"data.{i}"] = _to_numpy(d)[:, :f].T
         return state
 
     def load_state_dict(self, state):
@@ -1130,9 +1130,9 @@ class Quantile(Stat):
             self.depth, quantiles.numel(), dtype=self.dtype, device=self.device
         )
         # numpy is needed for interpolation
-        nq = quantiles.view(-1).cpu().detach().numpy()
-        ncw = cumweights.cpu().detach().numpy()
-        nsm = summary.cpu().detach().numpy()
+        nq = _to_numpy(quantiles.view(-1))
+        ncw = _to_numpy(cumweights)
+        nsm = _to_numpy(summary)
         for d in range(self.depth):
             result[d] = torch.tensor(
                 numpy.interp(nq, ncw[d], nsm[d]), dtype=self.dtype, device=self.device
@@ -1166,9 +1166,9 @@ class Quantile(Stat):
         cumweights /= torch.sum(weights, dim=-1, keepdim=True)
         result = torch.zeros_like(data).float()
         # numpy is needed for interpolation
-        ndata = data.cpu().numpy().reshape((data.shape[0], -1))
-        ncw = cumweights.cpu().numpy()
-        nsm = summary.cpu().numpy()
+        ndata = _to_numpy(data).reshape((data.shape[0], -1))
+        ncw = _to_numpy(cumweights)
+        nsm = _to_numpy(summary)
         for d in range(self.depth):
             normed = torch.tensor(
                 numpy.interp(ndata[d], nsm[d], ncw[d]),
@@ -1302,16 +1302,16 @@ class TopK(Stat):
             top_data=(
                 None
                 if self.top_data is None
-                else self.top_data.cpu().detach().numpy()
+                else _to_numpy(self.top_data)
             ),
             top_index=(
                 None
                 if self.top_index is None
-                else self.top_index.cpu().detach().numpy()
+                else _to_numpy(self.top_index)
             ),
             next=self.next,
             linear_index=(
-                self.linear_index.cpu().numpy()
+                _to_numpy(self.linear_index)
                 if isinstance(self.linear_index, torch.Tensor)
                 else self.linear_index
             ),
@@ -1373,7 +1373,7 @@ class History(Stat):
         self._cat_added()
         return dict(
             constructor=self.__module__ + "." + self.__class__.__name__ + "()",
-            data=None if self._data is None else self._data.cpu().numpy(),
+            data=None if self._data is None else _to_numpy(self._data),
         )
 
     def to_(self, device):
