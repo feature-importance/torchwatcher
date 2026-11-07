@@ -100,6 +100,7 @@ def _(nn, resnet18, sel):
         Compose,
         EveryNSteps,
         InMemorySink,
+        MNIST,
         ParameterTracker,
         ToTensor,
         Trial,
@@ -145,14 +146,14 @@ def _(frame, path_contains):
         ax1.set_ylim(0, max_grad)
         sns.lineplot(path_contains(frame, [*layer, "gradient_norm"]), x="global_step", y="value", color=colour, ax=ax1)
         ax1.tick_params(axis='y', labelcolor=colour)
-    
+
         ax2 = ax1.twinx()  # instantiate a second Axes that shares the same x-axis
         ax2.set_ylim(0, max_update)
         colour = 'tab:blue'
         ax2.set_ylabel('update_norm', color=colour)  # we already handled the x-label with ax1
         sns.lineplot(path_contains(frame, [*layer, "update_norm"]), x="global_step", y="value", color=colour, ax=ax2)
         ax2.tick_params(axis='y', labelcolor=colour)
-    
+
         fig.tight_layout()  # otherwise the right y-label is slightly clipped
         plt.show()
     return
@@ -160,10 +161,10 @@ def _(frame, path_contains):
 
 @app.cell
 def _(
-    CIFAR10,
     Compose,
     EveryNSteps,
     InMemorySink,
+    MNIST,
     ParameterTracker,
     ToTensor,
     Trial,
@@ -179,7 +180,7 @@ def _(
 
     def compare(epochs=1, steps=1):
         base = resnet18()
-        data = CIFAR10(root="/Users/jsh2/Data/", train=True, transform=Compose([ToTensor(), v2.RGB()]))
+        data = MNIST(root="/Users/jsh2/Data/", train=True, transform=Compose([ToTensor(), v2.RGB()]))
         loader = torch.utils.data.DataLoader(data, shuffle=False, batch_size=32)
 
         sink = InMemorySink()
@@ -215,7 +216,7 @@ def _(
 
                 if counter % steps == 0:
                     trace.append((after.detach() - before.detach()).norm().cpu().item())
-        
+    
                 counter +=1
 
         return observations_to_dataframe(sink.observations)['value'], trace

@@ -481,7 +481,7 @@ class Analyser[T](WrappedForwardInterjection):
 
         if self.gradient:
             return self._store_current_state(name, s)
-        self.finalize_state(s)
+        self.finalise_state(s)
 
     def log_backward(self, invocation, grad_input, grad_output):
         s = self._pop_current_state(invocation)
@@ -493,7 +493,7 @@ class Analyser[T](WrappedForwardInterjection):
         s._output_gradients = grad_output
         s._output_gradients_set = True
 
-        self.finalize_state(s)
+        self.finalise_state(s)
 
     def _store_current_state(self, name: str, state: Any) -> _AnalyserInvocation:
         invocation = _AnalyserInvocation(name, self._next_invocation)
@@ -525,7 +525,7 @@ class Analyser[T](WrappedForwardInterjection):
         self._targets = targets
         self._targets_set = True
 
-    def finalize_state(self, state: AnalyserState):
+    def finalise_state(self, state: AnalyserState):
         name = state.name
 
         # only if enabled do the updates
@@ -780,12 +780,12 @@ class RelationalAnalyser[T](Analyser[T]):
         self._batch_states = {}
         try:
             yield
-            self._finalize_relational_batch()
+            self._finalise_relational_batch()
         finally:
             self._batch_states = {}
             self._batch_active = False
 
-    def _finalize_relational_batch(self):
+    def _finalise_relational_batch(self):
         comparisons = self.comparisons
         if not comparisons:
             raise RuntimeError("no watched sources have been registered")

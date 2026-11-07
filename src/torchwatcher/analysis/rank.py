@@ -138,6 +138,11 @@ class RankAnalyser(Analyser):
         if mode not in {'aTa', 'aaT', 'a'}:
             raise ValueError('Unknown mode')
 
+    def reset(self):
+        super().reset()
+        self.indices = {}
+        self.features_dim = {}
+
     def process_batch_state(self,
                             name: str,
                             state: AnalyserState,

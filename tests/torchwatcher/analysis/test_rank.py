@@ -136,6 +136,23 @@ def test_rank_analyser_non_positive_sample_size_uses_every_feature():
     assert analyser.to_dict()["0"]["features_rank"] == 2
 
 
+def test_rank_analyser_reset_clears_feature_shape_and_sampling_state():
+    analyser = RankAnalyser(n=2)
+    watched_model = interject_by_name(
+        nn.Sequential(nn.Identity()),
+        "0",
+        analyser,
+    )
+
+    watched_model(torch.randn(4, 3))
+    analyser.reset()
+    watched_model(torch.randn(4, 4))
+
+    result = analyser.to_dict()["0"]
+    assert result["features_dim"] == 4
+    assert analyser.indices["0"].shape == (2,)
+
+
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("mode", ["aTa", "aaT", "a"])
 def test_rank_analyser_supports_low_precision_activations(mode, dtype):
