@@ -15,7 +15,8 @@ from torchwatcher.parameters.selectors import (
     parameters,
     select_parameters,
 )
-from torchwatcher.interjection import trace
+from torchwatcher.analysis import NameAnalyser
+from torchwatcher.interjection import interject_by_module_class, trace
 
 
 class ExampleModel(nn.Module):
@@ -301,3 +302,34 @@ def test_dual_graph_selectors_use_original_parameter_names():
         "eval_layer.weight",
         "eval_layer.bias",
     ]
+
+
+def test_interjected_selectors_use_original_names_modules_and_aliases():
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.left = nn.Linear(2, 2, bias=False)
+            self.right = nn.Linear(2, 2, bias=False)
+            self.right.weight = self.left.weight
+
+        def forward(self, inputs):
+            return self.right(self.left(inputs))
+
+    source = Model()
+    model = interject_by_module_class(
+        source,
+        nn.Linear,
+        NameAnalyser(),
+    )
+
+    assert [
+        name for name, _ in model.named_parameters(remove_duplicate=False)
+    ] == ["left.weight", "right.weight"]
+    selected = select_parameters(model, matches_full_name("right.weight"))
+
+    assert len(selected) == 1
+    assert selected[0].aliases == ("left.weight", "right.weight")
+    assert selected[0].registrations[0].module is source.left
+    assert selected[0].registrations[1].module is source.right
+    assert _names(model, matches_module_name("right")) == ["left.weight"]
+    assert _names(model, matches_module_class(nn.Linear)) == ["left.weight"]

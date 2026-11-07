@@ -56,7 +56,7 @@ from torch.utils.data.sampler import Sampler
 
 
 def _to_numpy(value):
-    return None if value is None else value.cpu().numpy()
+    return None if value is None else value.detach().cpu().numpy()
 
 
 def _from_numpy(value):

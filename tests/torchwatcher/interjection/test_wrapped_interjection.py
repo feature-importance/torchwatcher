@@ -42,6 +42,61 @@ class _StatefulInterjection(WrappedForwardInterjection):
         pass
 
 
+class _ExtraStateLinear(nn.Linear):
+    def __init__(self, in_features, out_features, value=0):
+        super().__init__(in_features, out_features)
+        self.value = value
+
+    def get_extra_state(self):
+        return self.value
+
+    def set_extra_state(self, state):
+        self.value = state
+
+
+class _VersionedLinear(nn.Linear):
+    _version = 7
+
+    def __init__(self, in_features, out_features):
+        super().__init__(in_features, out_features)
+        self.loaded_versions = []
+
+    def _load_from_state_dict(
+            self, state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs):
+        self.loaded_versions.append(local_metadata.get("version"))
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
+
+class _ExtraStateBlock(nn.Module):
+    def __init__(self, value=0):
+        super().__init__()
+        self.linear = _ExtraStateLinear(2, 1, value=value)
+
+    def forward(self, inputs):
+        return self.linear(inputs)
+
+
+class _ExtraStateInterjection(_StatefulInterjection):
+    def __init__(self):
+        super().__init__()
+        self.value = 5
+
+    def get_extra_state(self):
+        return self.value
+
+    def set_extra_state(self, state):
+        self.value = state
+
+
 class _ScaleBackward(WrappedForwardBackwardInterjection):
     def process_backward(self, name, module, grad_input, grad_output):
         return grad_input * 2
@@ -1002,6 +1057,107 @@ def test_interjected_checkpoint_uses_original_buffer_names():
     )
 
 
+def test_interjected_checkpoint_translates_original_extra_state():
+    source = nn.Sequential(_ExtraStateLinear(2, 1, value=11))
+    watched_model = interject_by_module_class(
+        source,
+        _ExtraStateLinear,
+        _ModuleRecorder(),
+    )
+    checkpoint = source.state_dict()
+    checkpoint["0._extra_state"] = 23
+
+    assert list(watched_model.state_dict()) == list(source.state_dict())
+    watched_model.load_state_dict(checkpoint, strict=True)
+
+    interjection = next(
+        module
+        for module in watched_model.modules()
+        if isinstance(module, _ModuleRecorder)
+    )
+    for training in (True, False):
+        operation = interjection.wrapped_module(
+            "0",
+            training=training,
+        ).get_submodule("0")
+        assert operation.value == 23
+
+    restored = nn.Sequential(_ExtraStateLinear(2, 1))
+    restored.load_state_dict(watched_model.state_dict(), strict=True)
+    assert restored[0].value == 23
+
+
+def test_tensor_extra_state_is_not_shape_validated_as_a_parameter():
+    source = nn.Sequential(
+        _ExtraStateLinear(2, 1, value=torch.ones(2)),
+    )
+    watched_model = interject_by_module_class(
+        source,
+        _ExtraStateLinear,
+        _ModuleRecorder(),
+    )
+    checkpoint = source.state_dict()
+    checkpoint["0._extra_state"] = torch.ones(3)
+
+    watched_model.load_state_dict(checkpoint, strict=True)
+
+    torch.testing.assert_close(
+        watched_model.state_dict()["0._extra_state"],
+        torch.ones(3),
+    )
+
+
+def test_interjected_checkpoint_translates_module_version_metadata():
+    source = nn.Sequential(_VersionedLinear(2, 1))
+    watched_model = interject_by_module_class(
+        source,
+        _VersionedLinear,
+        _ModuleRecorder(),
+    )
+
+    watched_model.load_state_dict(source.state_dict(), strict=True)
+
+    assert source[0].loaded_versions
+    assert set(source[0].loaded_versions) == {_VersionedLinear._version}
+
+    restored = nn.Sequential(_VersionedLinear(2, 1))
+    restored.load_state_dict(watched_model.state_dict(), strict=True)
+    assert restored[0].loaded_versions == [_VersionedLinear._version]
+
+
+def test_interjected_checkpoint_translates_descendant_extra_state():
+    source = nn.Sequential(_ExtraStateBlock(value=11))
+    watched_model = interject_by_module_class(
+        source,
+        _ExtraStateBlock,
+        _ModuleRecorder(),
+    )
+    checkpoint = source.state_dict()
+    checkpoint["0.linear._extra_state"] = 23
+
+    watched_model.load_state_dict(checkpoint, strict=True)
+
+    assert watched_model.state_dict()["0.linear._extra_state"] == 23
+
+
+def test_interjection_extra_state_remains_in_auxiliary_namespace():
+    interjection = _ExtraStateInterjection()
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        interjection,
+    )
+
+    checkpoint = watched_model.state_dict()
+
+    assert checkpoint[
+        "_torchwatcher._ExtraStateInterjection0._extra_state"
+    ] == 5
+    interjection.value = 9
+    watched_model.load_state_dict(checkpoint, strict=True)
+    assert interjection.value == 5
+
+
 def test_interjected_checkpoint_preserves_original_shared_alias_names():
     class Model(nn.Module):
         def __init__(self):
@@ -1110,6 +1266,118 @@ def test_interjected_load_diagnostics_use_original_names():
 
     assert incompatible.missing_keys == ["0.weight", "0.bias"]
     assert incompatible.unexpected_keys == []
+
+
+@pytest.mark.parametrize("interjected", [False, True])
+def test_size_mismatch_uses_one_logical_name(interjected):
+    watched_model = (
+        interject_by_module_class(
+            nn.Sequential(nn.Linear(2, 1)),
+            nn.Linear,
+            _ModuleRecorder(),
+        )
+        if interjected
+        else trace(nn.Sequential(nn.Linear(2, 1)))
+    )
+    checkpoint = watched_model.state_dict()
+    checkpoint["0.weight"] = torch.zeros(3, 3)
+
+    with pytest.raises(RuntimeError) as error:
+        watched_model.load_state_dict(checkpoint, strict=True)
+
+    message = str(error.value)
+    assert message.count("size mismatch for 0.weight:") == 1
+    assert "train_module" not in message
+    assert "eval_module" not in message
+    assert ".interjection." not in message
+
+
+def test_nested_size_mismatch_preserves_outer_prefix():
+    model = nn.Module()
+    model.watched = interject_by_module_class(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        _ModuleRecorder(),
+    )
+    checkpoint = model.state_dict()
+    checkpoint["watched.0.weight"] = torch.zeros(3, 3)
+
+    with pytest.raises(RuntimeError) as error:
+        model.load_state_dict(checkpoint, strict=True)
+
+    message = str(error.value)
+    assert message.count("size mismatch for watched.0.weight:") == 1
+    assert "train_module" not in message
+    assert "eval_module" not in message
+
+
+def test_size_mismatch_with_assign_keeps_the_existing_parameter():
+    watched_model = trace(nn.Sequential(nn.Linear(2, 1)))
+    parameter = watched_model.get_parameter("train_module.0.weight")
+    checkpoint = watched_model.state_dict()
+    checkpoint["0.weight"] = torch.zeros(3, 3)
+
+    with pytest.raises(RuntimeError, match="size mismatch for 0.weight"):
+        watched_model.load_state_dict(checkpoint, strict=True, assign=True)
+
+    assert watched_model.get_parameter("train_module.0.weight") is parameter
+
+
+def test_size_mismatch_uses_final_shared_alias_once():
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            shared = nn.Linear(2, 2)
+            self.left = shared
+            self.right = shared
+
+        def forward(self, inputs):
+            return self.right(self.left(inputs))
+
+    watched_model = interject_by_module_class(
+        Model(),
+        nn.Linear,
+        _ModuleRecorder(),
+    )
+    checkpoint = watched_model.state_dict()
+    checkpoint["right.weight"] = torch.zeros(3, 3)
+
+    with pytest.raises(RuntimeError) as error:
+        watched_model.load_state_dict(checkpoint, strict=True)
+
+    message = str(error.value)
+    assert message.count("size mismatch for right.weight:") == 1
+    assert "left.weight" not in message
+
+
+def test_shape_validation_preserves_scalar_checkpoint_compatibility():
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_buffer("scale", torch.tensor(1.0))
+
+        def forward(self, inputs):
+            return inputs * self.scale
+
+    watched_model = trace(Model())
+    checkpoint = watched_model.state_dict()
+    checkpoint["scale"] = torch.tensor([3.0])
+
+    watched_model.load_state_dict(checkpoint, strict=True)
+
+    torch.testing.assert_close(
+        watched_model.state_dict()["scale"],
+        torch.tensor(3.0),
+    )
+
+
+def test_shape_validation_preserves_lazy_parameter_loading():
+    watched_model = trace(nn.Sequential(nn.LazyLinear(2)))
+    checkpoint = nn.Sequential(nn.Linear(3, 2)).state_dict()
+
+    watched_model.load_state_dict(checkpoint, strict=True)
+
+    assert watched_model.state_dict()["0.weight"].shape == (2, 3)
 
 
 def test_nested_dual_graph_load_diagnostics_preserve_outer_prefix():

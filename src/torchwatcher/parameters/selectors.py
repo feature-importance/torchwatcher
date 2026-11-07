@@ -297,11 +297,19 @@ def _parameter_occurrences(
         model: nn.Module
 ) -> list[tuple[nn.Parameter, ParameterRegistration]]:
     occurrences = []
-    roots = (
-        (model.train_module, model.eval_module)
-        if isinstance(model, DualGraphModule)
-        else (model,)
-    )
+    if isinstance(model, DualGraphModule):
+        for full_name, module, parameter_name, parameter in (
+                model.logical_parameter_registrations()):
+            module_name = full_name.rpartition(".")[0]
+            occurrences.append((parameter, ParameterRegistration(
+                full_name=full_name,
+                module_name=module_name,
+                parameter_name=parameter_name,
+                module=module,
+            )))
+        return occurrences
+
+    roots = (model,)
     for root in roots:
         for module_name, module in root.named_modules(remove_duplicate=False):
             for parameter_name, parameter in module.named_parameters(

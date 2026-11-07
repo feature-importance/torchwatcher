@@ -66,6 +66,38 @@ def _dual_graph_checkpoint_names(module, graph_name, state_name):
     return (state_name,)
 
 
+def _dual_graph_metadata_names(module, graph_name, module_name):
+    """Return public checkpoint paths for an internal module registration."""
+    if not module_name:
+        return ("",)
+    source_names = module._graph_module_to_source.get(
+        (graph_name, module_name),
+    )
+    if source_names is not None:
+        return source_names
+    if module_name.split(".", 1)[0] in module._auxiliary_module_names:
+        return (f"{_TORCHWATCHER_STATE_PREFIX}{module_name}",)
+    return (module_name,)
+
+
+def _state_shapes_mismatch(expected, supplied):
+    """Match PyTorch's standard parameter and buffer shape validation."""
+    if (
+            not torch.overrides.is_tensor_like(expected)
+            or not torch.overrides.is_tensor_like(supplied)
+            or torch.nn.parameter.is_lazy(expected)
+    ):
+        return False
+    if (
+            len(expected.shape) == 0
+            and len(supplied.shape) == 1
+            and supplied.shape[0] == 1
+    ):
+        # Preserve PyTorch's compatibility with scalar checkpoints from 0.3.
+        return False
+    return supplied.shape != expected.shape
+
+
 def _dual_graph_state_dict_hook(
         module,
         state_dict,
@@ -102,12 +134,15 @@ def _dual_graph_state_dict_hook(
                 continue
             if not key.startswith(f"{graph_root}."):
                 continue
-            suffix = key[len(graph_root) + 1:]
-            logical_key = (
-                f"{logical_root}.{suffix}" if logical_root else suffix
-            )
-            if logical_key not in metadata:
-                metadata[logical_key] = metadata[key]
+            module_name = key[len(graph_root) + 1:]
+            for checkpoint_name in _dual_graph_metadata_names(
+                    module, graph_name, module_name):
+                logical_key = ".".join(filter(None, (
+                    logical_root,
+                    checkpoint_name,
+                )))
+                if logical_key not in metadata:
+                    metadata[logical_key] = metadata[key]
             del metadata[key]
 
 
@@ -119,7 +154,7 @@ def _dual_graph_load_state_dict_pre_hook(
         _strict,
         missing_keys,
         _unexpected_keys,
-        _error_messages,
+        error_messages,
 ):
     """Expand logical checkpoint keys for each mode graph that owns them."""
     module.__dict__.setdefault(
@@ -127,6 +162,7 @@ def _dual_graph_load_state_dict_pre_hook(
         [],
     ).append(prefix)
     translated_keys = set()
+    reported_shape_mismatches = set()
     relative_keys = {
         key[len(prefix):]
         for key in state_dict
@@ -136,8 +172,39 @@ def _dual_graph_load_state_dict_pre_hook(
         key.startswith(_TORCHWATCHER_STATE_PREFIX)
         for key in relative_keys
     )
+    metadata = getattr(state_dict, "_metadata", None)
+    if metadata is not None:
+        logical_root = prefix[:-1]
+        for graph_name in ("train_module", "eval_module"):
+            graph_module = getattr(module, graph_name)
+            for module_name, _ in graph_module.named_modules(
+                    remove_duplicate=False):
+                checkpoint_names = _dual_graph_metadata_names(
+                    module,
+                    graph_name,
+                    module_name,
+                )
+                supplied_names = [
+                    ".".join(filter(None, (logical_root, checkpoint_name)))
+                    for checkpoint_name in checkpoint_names
+                ]
+                supplied_names = [
+                    name for name in supplied_names if name in metadata
+                ]
+                if supplied_names:
+                    internal_name = ".".join(filter(None, (
+                        logical_root,
+                        graph_name,
+                        module_name,
+                    )))
+                    metadata.setdefault(
+                        internal_name,
+                        metadata[supplied_names[-1]],
+                    )
+
     for graph_name in ("train_module", "eval_module"):
         graph_module = getattr(module, graph_name)
+        graph_state_objects = _state_objects(graph_module)
         for key, value in graph_module.state_dict().items():
             checkpoint_names = _dual_graph_checkpoint_names(
                 module,
@@ -153,8 +220,35 @@ def _dual_graph_load_state_dict_pre_hook(
             if supplied_keys:
                 # Shared aliases are loaded in source traversal order, so the
                 # final alias has the same precedence as nn.Module loading.
+                supplied_key = supplied_keys[-1]
+                supplied_value = state_dict[supplied_key]
+                shape_mismatch = (
+                    key in graph_state_objects
+                    and _state_shapes_mismatch(
+                        graph_state_objects[key],
+                        supplied_value,
+                    )
+                )
+                if (
+                        shape_mismatch
+                        and supplied_key not in reported_shape_mismatches
+                ):
+                    error_messages.append(
+                        f"size mismatch for {supplied_key}: copying a param "
+                        f"with shape {supplied_value.shape} from checkpoint, "
+                        f"the shape in current model is {value.shape}."
+                    )
+                    reported_shape_mismatches.add(supplied_key)
                 if graph_key not in state_dict:
-                    state_dict[graph_key] = state_dict[supplied_keys[-1]]
+                    # A mismatched public tensor has already produced one
+                    # logical error. Use the current value internally so each
+                    # mode graph does not report the same implementation-path
+                    # mismatch again.
+                    state_dict[graph_key] = (
+                        graph_state_objects[key]
+                        if shape_mismatch
+                        else supplied_value
+                    )
                 translated_keys.update(supplied_keys)
                 for checkpoint_name in checkpoint_names:
                     checkpoint_key = f"{prefix}{checkpoint_name}"
@@ -234,20 +328,56 @@ def _build_dual_graph_state_mapping(
         source_module,
         train_module,
         eval_module,
+        original_module_copies=(),
 ):
     if source_module is None:
-        return frozenset(), {}
+        return frozenset(), {}, {}
 
     source_objects = _state_objects(source_module)
     source_names_by_id: dict[int, list[str]] = {}
     for name, value in source_objects.items():
         source_names_by_id.setdefault(id(value), []).append(name)
 
+    source_module_names_by_id: dict[int, list[str]] = {}
+    for name, source_child in source_module.named_modules(
+            remove_duplicate=False):
+        source_module_names_by_id.setdefault(id(source_child), []).append(name)
+
+    copied_to_source_id = {}
+
+    def pair_module_trees(copied, original, seen):
+        pair = (id(copied), id(original))
+        if pair in seen:
+            return
+        seen.add(pair)
+        copied_to_source_id[id(copied)] = id(original)
+        for name, copied_child in copied._modules.items():
+            original_child = original._modules.get(name)
+            if copied_child is not None and original_child is not None:
+                pair_module_trees(copied_child, original_child, seen)
+
+    seen_pairs = set()
+    for copied, original in original_module_copies:
+        pair_module_trees(copied, original, seen_pairs)
+
     graph_to_source = {}
+    graph_module_to_source = {}
     for graph_name, graph_module in (
             ("train_module", train_module),
             ("eval_module", eval_module),
     ):
+        for module_name, graph_child in graph_module.named_modules(
+                remove_duplicate=False):
+            source_id = copied_to_source_id.get(
+                id(graph_child),
+                id(graph_child),
+            )
+            source_names = source_module_names_by_id.get(source_id)
+            if source_names:
+                graph_module_to_source[(graph_name, module_name)] = tuple(
+                    source_names
+                )
+
         for state_name, value in _state_objects(graph_module).items():
             source_names = source_names_by_id.get(id(value))
             if source_names:
@@ -255,13 +385,40 @@ def _build_dual_graph_state_mapping(
                     source_names
                 )
 
-    return frozenset(source_module.state_dict()), graph_to_source
+        graph_state_names = set(graph_module.state_dict())
+        source_state_names = set(source_module.state_dict())
+        for (mapped_graph_name, module_name), source_names in tuple(
+                graph_module_to_source.items()):
+            if mapped_graph_name != graph_name:
+                continue
+            state_name = ".".join(filter(None, (
+                module_name,
+                "_extra_state",
+            )))
+            if state_name not in graph_state_names:
+                continue
+            checkpoint_names = tuple(
+                ".".join(filter(None, (source_name, "_extra_state")))
+                for source_name in source_names
+            )
+            checkpoint_names = tuple(
+                name for name in checkpoint_names
+                if name in source_state_names
+            )
+            if checkpoint_names:
+                graph_to_source[(graph_name, state_name)] = checkpoint_names
+
+    return (
+        frozenset(source_module.state_dict()),
+        graph_to_source,
+        graph_module_to_source,
+    )
 
 
 class DualGraphModule(nn.Module):
     def __init__(self, train_module: nn.Module, eval_module: nn.Module,
                  class_name="DualGraphModule", source_module=None,
-                 auxiliary_module_names=()):
+                 auxiliary_module_names=(), original_module_copies=()):
         super().__init__()
 
         # This is a per-instance label used by drawing and diagnostics. Renaming
@@ -272,11 +429,14 @@ class DualGraphModule(nn.Module):
         (
             self._source_state_names,
             self._graph_state_to_source,
+            self._graph_module_to_source,
         ) = _build_dual_graph_state_mapping(
             source_module,
             train_module,
             eval_module,
+            original_module_copies,
         )
+        self.__dict__["_torchwatcher_source_module"] = (source_module,)
         self._auxiliary_module_names = frozenset(auxiliary_module_names)
         self.register_state_dict_post_hook(_dual_graph_state_dict_hook)
         self.register_load_state_dict_pre_hook(
@@ -320,20 +480,12 @@ class DualGraphModule(nn.Module):
             return
 
         seen_parameters = set()
-        seen_registrations = set()
-        for graph_module in (self.train_module, self.eval_module):
-            for name, parameter in graph_module.named_parameters(
-                    prefix=prefix,
-                    remove_duplicate=False,
-            ):
-                registration = (name, id(parameter))
-                if registration in seen_registrations:
-                    continue
-                seen_registrations.add(registration)
-                if remove_duplicate and parameter in seen_parameters:
-                    continue
-                seen_parameters.add(parameter)
-                yield name, parameter
+        for name, _module, _parameter_name, parameter in (
+                self.logical_parameter_registrations()):
+            if remove_duplicate and parameter in seen_parameters:
+                continue
+            seen_parameters.add(parameter)
+            yield ".".join(filter(None, (prefix, name))), parameter
 
     def named_buffers(
             self,
@@ -351,19 +503,65 @@ class DualGraphModule(nn.Module):
             return
 
         seen_buffers = set()
-        seen_names = set()
-        for graph_module in (self.train_module, self.eval_module):
-            for name, buffer in graph_module.named_buffers(
-                    prefix=prefix,
-                    remove_duplicate=False,
-            ):
-                if name in seen_names:
-                    continue
-                seen_names.add(name)
-                if remove_duplicate and buffer in seen_buffers:
-                    continue
-                seen_buffers.add(buffer)
-                yield name, buffer
+        for name, _module, _buffer_name, buffer in (
+                self._logical_registrations("buffer")):
+            if remove_duplicate and buffer in seen_buffers:
+                continue
+            seen_buffers.add(buffer)
+            yield ".".join(filter(None, (prefix, name))), buffer
+
+    def _logical_registrations(self, kind):
+        """Yield logical names, owners and values for one registration type."""
+        source_module = self.__dict__["_torchwatcher_source_module"][0]
+        graph_values = {
+            id(value)
+            for graph_module in (self.train_module, self.eval_module)
+            for _name, value in getattr(
+                graph_module,
+                f"named_{kind}s",
+            )(remove_duplicate=False)
+        }
+        emitted_names = set()
+        source_value_ids = set()
+        if source_module is not None:
+            registration_name = f"_{kind}s"
+            for module_name, owner in source_module.named_modules(
+                    remove_duplicate=False):
+                for local_name, value in getattr(owner, registration_name).items():
+                    if value is None or id(value) not in graph_values:
+                        continue
+                    full_name = ".".join(filter(None, (
+                        module_name,
+                        local_name,
+                    )))
+                    emitted_names.add(full_name)
+                    source_value_ids.add(id(value))
+                    yield full_name, owner, local_name, value
+
+        for graph_name, graph_module in (
+                ("train_module", self.train_module),
+                ("eval_module", self.eval_module),
+        ):
+            registration_name = f"_{kind}s"
+            for module_name, owner in graph_module.named_modules(
+                    remove_duplicate=False):
+                for local_name, value in getattr(owner, registration_name).items():
+                    if value is None or id(value) in source_value_ids:
+                        continue
+                    state_name = ".".join(filter(None, (
+                        module_name,
+                        local_name,
+                    )))
+                    for full_name in _dual_graph_checkpoint_names(
+                            self, graph_name, state_name):
+                        if full_name in emitted_names:
+                            continue
+                        emitted_names.add(full_name)
+                        yield full_name, owner, local_name, value
+
+    def logical_parameter_registrations(self):
+        """Yield parameter registrations in the original model namespace."""
+        yield from self._logical_registrations("parameter")
 
     def apply(self, fn: Callable[[nn.Module], None]):
         """Apply ``fn`` once to each logical module in both mode graphs.
@@ -744,7 +942,8 @@ def _copy_module_structure(
 
 def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
                         interjection: Interjection,
-                        training: bool) -> str:
+                        training: bool,
+                        original_module_copies=None) -> str:
     """Insert an interjection into the traced module at a given node. If the
     interjection is of the wrapped type, then the node is replaced with
     interjection (which wraps the original node); otherwise the new node is
@@ -777,6 +976,16 @@ def insert_interjection(graph_module: fx.GraphModule, node: fx.Node,
         graph_module.set_submodule(node.target, module)
     if requires_out_of_place:
         node = handle_inplace(graph_module, node)
+
+    if (
+            original_module_copies is not None
+            and original_module is not None
+            and hasattr(interjection, '_wrapped')
+    ):
+        original_module_copies.append((
+            graph_module.get_submodule(node.target),
+            original_module,
+        ))
 
     if hasattr(interjection, '_wrapped'):
         with graph_module.graph.inserting_after(node):
@@ -892,6 +1101,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
     with preserve_training_modes(model):
         graphmodules = {}
         auxiliary_module_names = set()
+        original_module_copies = []
         for mode in ["train", "eval"]:
             if mode == "train":
                 model.train()
@@ -906,6 +1116,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
                         node,
                         interjection,
                         training=mode == "train",
+                        original_module_copies=original_module_copies,
                     )
                     auxiliary_module_names.add(interjection_name)
 
@@ -921,6 +1132,7 @@ def interject_by_match(model: nn.Module, selector: NodeSelector,
             class_name="DualGraphModule_" + _get_name(model),
             source_module=model,
             auxiliary_module_names=auxiliary_module_names,
+            original_module_copies=original_module_copies,
         )
         graph_module.train(is_training)
 
