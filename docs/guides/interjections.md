@@ -227,6 +227,35 @@ leaf modules. Mixed leaf modes are allowed, but root-level `train()` and
 `eval()` calls still recursively update them in the usual PyTorch way; configure
 any required leaf overrides on the returned model after changing its root mode.
 
+## Saving and loading checkpoints
+
+FX-based watched models expose the original model's parameter and buffer names
+in their `state_dict`. State owned by an interjection or analyser is stored
+separately under the `_torchwatcher.` prefix. A complete checkpoint can
+therefore be saved and restored using the usual PyTorch APIs:
+
+```python
+torch.save(watched_model.state_dict(), "watched.pt")
+
+state = torch.load("watched.pt", weights_only=True)
+watched_model.load_state_dict(state, strict=True)
+```
+
+A watched model also accepts a checkpoint produced by the original, unwatched
+model. Such a checkpoint contains no `_torchwatcher.` keys, so TorchWatcher
+loads the model state and leaves analyser or interjection state at its current
+initialization.
+
+This creates an unavoidable ambiguity when filtering checkpoints: if every
+`_torchwatcher.` key is removed from a complete watched-model checkpoint, the
+result is indistinguishable from an intentional original-model checkpoint.
+Even with `strict=True`, it is consequently accepted without reporting the
+removed analyser state as missing. Preserve all `_torchwatcher.` keys when a
+checkpoint must resume analyser or interjection state. Removing them is
+appropriate only when deliberately creating a model-only checkpoint. If at
+least one `_torchwatcher.` key remains, normal strict loading reports other
+missing TorchWatcher state.
+
 ## Native Interjections
 
 Native interjections are interjections that are inserted into a model without using the `torch.fx` tracing API.
