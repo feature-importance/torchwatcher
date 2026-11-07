@@ -365,7 +365,7 @@ class Padding(MultiNodeSelector, Enum):
         MultiNodeSelector.__init__(self, value)
 
 
-class Normalization(MultiNodeSelector, Enum):
+class Normalisation(MultiNodeSelector, Enum):
     is_batch_norm = [
         getattr(torch, "batch_norm", None),
         getattr(torch, "native_batch_norm", None),
@@ -404,7 +404,7 @@ class Normalization(MultiNodeSelector, Enum):
         getattr(torch.nn, "LocalResponseNorm", None),
         getattr(torch.nn.functional, "local_response_norm", None)
     ]
-    is_normalization = _All()
+    is_normalisation = _All()
 
     def __init__(self, value):
         Enum.__init__(self)

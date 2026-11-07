@@ -196,7 +196,7 @@ def test_covariance_spectrum_non_positive_sample_size_uses_full_dimension(n):
     result = analyser.to_dict()["0"]
     assert result["features_dim"] == 3
     assert result["features_rank"] == 3
-    assert result["normalized_features_rank"] == 1.0
+    assert result["normalised_features_rank"] == 1.0
 
 
 @pytest.mark.parametrize(

@@ -2,10 +2,13 @@ import torch
 from torch import nn
 
 from torchwatcher.interjection.node_selector import (
+    Normalisation,
     first,
     has_following,
     has_preceding,
     is_module,
+    is_normalisation,
+    is_parametrised,
     last,
     match_slice,
     matches_name,
@@ -145,3 +148,24 @@ def test_shuffle_selectors_match_functional_calls():
         FunctionalShuffles(),
         Shuffle.is_shuffle,
     ) == ["channel_shuffle", "pixel_shuffle", "pixel_unshuffle"]
+
+
+def test_normalisation_selector_uses_british_spelling():
+    model = nn.Sequential(nn.BatchNorm1d(2))
+
+    assert _selected_names(
+        model,
+        Normalisation.is_normalisation,
+    ) == ["_0"]
+    assert _selected_names(model, is_normalisation) == ["_0"]
+
+
+def test_parametrised_selector_uses_british_spelling():
+    model = nn.Sequential(nn.Linear(2, 1))
+    nn.utils.parametrize.register_parametrization(
+        model[0],
+        "weight",
+        nn.Identity(),
+    )
+
+    assert _selected_names(model, is_parametrised) == ["_0"]

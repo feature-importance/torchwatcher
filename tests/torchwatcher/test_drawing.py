@@ -47,6 +47,15 @@ def test_drawing_uses_the_dual_graph_instance_name():
     assert "DualGraphModule_OtherModel" not in graph_source
 
 
+def test_drawing_normalises_arguments_with_british_keyword():
+    graph = draw_graph(
+        trace(nn.Sequential(nn.Linear(2, 1))),
+        normalise_args=True,
+    )
+
+    assert graph is not None
+
+
 class _NestedOutput(nn.Module):
     def forward(self, inputs):
         return {"full": (inputs, {"slice": inputs[:, :1]})}

@@ -1,5 +1,5 @@
 import copy
-from typing import Any, Callable, List, Union
+from typing import Callable, List, Union
 
 import torchbearer
 from torch import nn, Tensor
@@ -91,14 +91,14 @@ class LinearProbe(Analyser):
 
     def __init__(self,
                  num_classes: int,
-                 partial_optim: Callable[[ParamsT], Optimizer],
+                 partial_optimiser: Callable[[ParamsT], Optimizer],
                  criterion: Callable|None = None,
                  metrics: List[Union[str, Metric]] = None):
         """Create a linear-probe analyser.
 
         Args:
             num_classes: Number of output classes for each probe classifier.
-            partial_optim: Callable that receives a probe's parameters and
+            partial_optimiser: Callable that receives a probe's parameters and
                 returns its optimiser, for example
                 ``lambda params: torch.optim.Adam(params, lr=1e-3)``.
             criterion: Loss function used by :meth:`train_step` and optional
@@ -112,7 +112,7 @@ class LinearProbe(Analyser):
         self.probes = nn.ModuleDict()
         self._probe_names = {}
         self.optimisers = {}
-        self.partial_optim = partial_optim
+        self.partial_optimiser = partial_optimiser
         self.criterion = criterion
         self.metrics = MetricList(metrics if metrics is not None
                                   else DEFAULT_METRICS)
@@ -161,7 +161,7 @@ class LinearProbe(Analyser):
                 suffix += 1
         self._probe_names[name] = probe_name
         self.probes[probe_name] = nn.LazyLinear(self.num_classes)
-        self.optimisers[name] = self.partial_optim(
+        self.optimisers[name] = self.partial_optimiser(
             self.probes[probe_name].parameters())
 
     def process_batch_state(self,

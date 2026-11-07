@@ -25,7 +25,7 @@ results = rank_analyser.to_dict()
 
 `to_dict()` returns a dictionary keyed by graph node name. The value for each
 node is analyser-specific. For example, `RankAnalyser` reports values such as
-`features_rank`, `features_dim`, and `normalized_features_rank`.
+`features_rank`, `features_dim`, and `normalised_features_rank`.
 
 ## Weight rank
 

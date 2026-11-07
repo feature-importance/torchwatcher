@@ -213,7 +213,7 @@ def _(
     )
     probe_trainer = LinearProbe(
         10,
-        partial_optim=lambda params: torch.optim.Adam(params, lr=PROBE_LR),
+        partial_optimiser=lambda params: torch.optim.Adam(params, lr=PROBE_LR),
         criterion=nn.CrossEntropyLoss(),
     )
     analyser = AnalyserList(rank_collector, probe_trainer)

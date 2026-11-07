@@ -1,7 +1,7 @@
 from .callbacks import AnalyserEvaluation, SelectedParametersCallback
 from .parameter_groups import ParameterGroup, build_parameter_groups
 from .parameter_tracking import (
-    OptimizerStepMeasurement,
+    OptimiserStepMeasurement,
     ParameterMeasurement,
     ParameterTracker,
 )
@@ -23,7 +23,7 @@ __all__ = [
     "EveryNSteps",
     "GLOBAL_STEP",
     "ObservationSchedule",
-    "OptimizerStepMeasurement",
+    "OptimiserStepMeasurement",
     "ParameterGroup",
     "ParameterMeasurement",
     "ParameterTracker",

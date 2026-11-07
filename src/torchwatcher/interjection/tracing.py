@@ -265,7 +265,7 @@ def _dual_graph_load_state_dict_pre_hook(
                     and graph_key not in state_dict
             ):
                 # An original checkpoint intentionally has no analyser state.
-                # Preserve the analyser's current initialization.
+                # Preserve the analyser's current initialisation.
                 state_dict[graph_key] = value
 
     if is_source_checkpoint:
@@ -700,11 +700,11 @@ def _set_default_tracer_kwargs(original_tr_kwargs: Optional[dict[str, Any]]) -> 
 def _validate_dual_graph_training_modes(
         model: nn.Module,
         tracer_kwargs: Optional[dict[str, Any]]) -> None:
-    """Reject mixed modes which would be specialized during FX tracing.
+    """Reject mixed modes which would be specialised during FX tracing.
 
     A leaf module retains its training flag as runtime module state. In
     contrast, a module which FX traces through can use ``self.training`` in
-    Python control flow, permanently specializing the resulting graph. Two
+    Python control flow, permanently specialising the resulting graph. Two
     root-level graphs cannot represent arbitrary per-module mode combinations.
     """
     tracer = HierarchyTracer(**_set_default_tracer_kwargs(tracer_kwargs))
@@ -918,7 +918,7 @@ def _copy_module_structure(
     Wrapped train and eval operations need independent module objects so that
     every descendant can retain its own ``training`` flag. Parameter and
     buffer registration dictionaries deliberately remain shared, preserving
-    optimizer state and mutable buffers such as BatchNorm running statistics.
+    optimiser state and mutable buffers such as BatchNorm running statistics.
     """
     if memo is None:
         memo = {}

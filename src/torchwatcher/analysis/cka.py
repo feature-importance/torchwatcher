@@ -77,8 +77,8 @@ def _biased_hsic(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         - right.mean(dim=1, keepdim=True)
         + right.mean()
     )
-    normalizer = max((n - 1) ** 2, 1)
-    return (left * right).sum() / normalizer
+    normaliser = max((n - 1) ** 2, 1)
+    return (left * right).sum() / normaliser
 
 
 def _unbiased_hsic(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:

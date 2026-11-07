@@ -60,7 +60,7 @@ def test_empty_statistic_file_round_trips(statistic_type, tmp_path):
     assert restored.state_dict() == statistic.state_dict()
 
 
-def test_topk_is_a_stat_and_initialized_state_round_trips():
+def test_topk_is_a_stat_and_initialised_state_round_trips():
     statistic = TopK(k=2)
     statistic.add(torch.tensor([3.0, 1.0, 2.0]))
 
@@ -73,7 +73,7 @@ def test_topk_is_a_stat_and_initialized_state_round_trips():
     torch.testing.assert_close(actual_indices, expected_indices)
 
 
-def test_initialized_quantile_state_round_trips():
+def test_initialised_quantile_state_round_trips():
     statistic = Quantile(r=8)
     statistic.add(torch.arange(12.0).reshape(6, 2))
 
@@ -132,10 +132,10 @@ def test_cross_covariance_accepts_non_contiguous_feature_maps():
 
     left_rows = left.reshape(2, 3, -1).permute(0, 2, 1).reshape(-1, 3)
     right_rows = right.reshape(2, 2, -1).permute(0, 2, 1).reshape(-1, 2)
-    left_centered = left_rows - left_rows.mean(dim=0)
-    right_centered = right_rows - right_rows.mean(dim=0)
+    left_centred = left_rows - left_rows.mean(dim=0)
+    right_centred = right_rows - right_rows.mean(dim=0)
     expected_covariance = (
-        left_centered.T @ right_centered / (left_rows.shape[0] - 1)
+        left_centred.T @ right_centred / (left_rows.shape[0] - 1)
     )
 
     means = statistic.mean()

@@ -93,7 +93,7 @@ callbacks = rank_evaluation.callbacks(
 `EveryNSteps(n)` records at fixed intervals, `AtSteps(...)` records explicit
 global steps, and `PredicateSchedule` adapts an arbitrary context predicate.
 Global step zero represents the initial model state; the first completed
-optimizer step is one. Pre-step consumers can associate gradients with that
+optimiser step is one. Pre-step consumers can associate gradients with that
 same step by requesting the upcoming-step context from `TrainingClock`.
 
 Each record has the following structure:
@@ -149,7 +149,7 @@ do not leak into the surrounding training loop.
 training lifecycle. It resolves the selection against the trial model at
 startup and calls an action once for each selected `ParameterInfo`, in selection
 order. By default, the action runs at `on_backward`, after gradients have been
-computed and before the optimizer step.
+computed and before the optimiser step.
 
 ```python
 import torch
@@ -176,8 +176,8 @@ input order, removes duplicates, and reports parameters which are not
 registered on the trial model.
 
 Set `event` to `on_start`, `on_backward`, or `on_step_training` to apply the
-action at model startup, between backward and the optimizer step, or after the
-optimizer step respectively. The action's return value is ignored; any
+action at model startup, between backward and the optimiser step, or after the
+optimiser step respectively. The action's return value is ignored; any
 mutation must be performed explicitly.
 
 ## Tracking selected parameters
@@ -204,9 +204,9 @@ tracker = ParameterTracker(
 ```
 
 The default event is `on_backward`, after gradients have been computed and
-before the optimizer update. Backward observations are associated with the
-upcoming optimizer step. Use `event="on_step_training"` to record parameter
-values after the optimizer update, or `event="on_start"` to record the initial
+before the optimiser update. Backward observations are associated with the
+upcoming optimiser step. Use `event="on_step_training"` to record parameter
+values after the optimiser update, or `event="on_start"` to record the initial
 state.
 
 Measurements can return nested mappings for related aggregations. They are
@@ -235,9 +235,9 @@ trackers or analyser-evaluation callbacks when they should share restored
 state. At training end it flushes the sink but leaves closing caller-owned
 sinks to the caller.
 
-To measure the update actually applied by the optimizer, use the synthetic
-`optimizer_step` event. The tracker snapshots selected parameters after
-backward, then subtracts that snapshot from the post-optimizer value. These
+To measure the update actually applied by the optimiser, use the synthetic
+`optimiser_step` event. The tracker snapshots selected parameters after
+backward, then subtracts that snapshot from the post-optimiser value. These
 measurement functions receive `(step, parameter_info, state)`, where
 `step = parameter_after - parameter_before`:
 
@@ -252,14 +252,14 @@ applied_steps = ParameterTracker(
     },
     sink,
     schedule=EveryNSteps(10),
-    event="optimizer_step",
+    event="optimiser_step",
 )
 ```
 
-This records the realized update, including learning rate, momentum, adaptive
+This records the realised update, including learning rate, momentum, adaptive
 scaling, weight decay and prior gradient mutation. The schedule is evaluated
-before the optimizer runs, so parameter snapshots are only retained for steps
+before the optimiser runs, so parameter snapshots are only retained for steps
 that will be recorded. Callback ordering remains significant: parameter
-mutations made after the optimizer but before the tracker's
+mutations made after the optimiser but before the tracker's
 `on_step_training` callback are included in the measured step.
 

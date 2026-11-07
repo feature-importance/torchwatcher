@@ -1,4 +1,4 @@
-"""Utilities for constructing optimizer parameter groups."""
+"""Utilities for constructing optimiser parameter groups."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ from torchwatcher.parameters import ParameterSelector, select_parameters
 
 @dataclass(frozen=True, init=False)
 class ParameterGroup:
-    """Describe an optimizer parameter group using a selector.
+    """Describe an optimiser parameter group using a selector.
 
     Args:
         selector: The selector defining which parameters belong to the group.
-        **options: Options to include in the optimizer parameter group, such as
+        **options: Options to include in the optimiser parameter group, such as
             ``lr`` or ``weight_decay``.
     """
 
@@ -43,12 +43,12 @@ def build_parameter_groups(
         *groups: ParameterGroup,
         include_remaining: bool = True,
 ) -> list[dict[str, Any]]:
-    """Build optimizer parameter groups for ``model``.
+    """Build optimiser parameter groups for ``model``.
 
     Each explicitly configured group is returned in declaration order. A
     parameter may belong to at most one explicit group. By default, parameters
     not matched by an explicit group are appended as a final group using the
-    optimizer's default options.
+    optimiser's default options.
 
     Args:
         model: The model whose parameters should be grouped.
@@ -57,7 +57,7 @@ def build_parameter_groups(
             explicit group.
 
     Returns:
-        A list of parameter group dictionaries accepted by PyTorch optimizers.
+        A list of parameter group dictionaries accepted by PyTorch optimisers.
 
     Raises:
         ValueError: If a group matches no parameters or explicit groups overlap.

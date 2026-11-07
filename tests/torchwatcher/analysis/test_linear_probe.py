@@ -23,7 +23,7 @@ class TestLinearProbes(unittest.TestCase):
 
     def test_linear_probes_untrained(self):
         lp = LinearProbe(1,
-                         partial_optim=self.optimiser,
+                         partial_optimiser=self.optimiser,
                          criterion=self.loss)
 
         net = interject_by_match(self.net, node_types.Activations.is_relu, lp)
@@ -46,7 +46,7 @@ class TestLinearProbes(unittest.TestCase):
                             nn.ReLU(),
                             nn.Linear(4, 2))
         lp = LinearProbe(2,
-                         partial_optim=lambda params: torch.optim.SGD(params, lr=0.1),
+                         partial_optimiser=lambda params: torch.optim.SGD(params, lr=0.1),
                          criterion=nn.CrossEntropyLoss())
         net = interject_by_match(net, node_types.Activations.is_relu, lp)
         loader = DataLoader(
@@ -72,7 +72,7 @@ class TestLinearProbes(unittest.TestCase):
                             nn.ReLU(),
                             nn.Linear(4, 2))
         lp = LinearProbe(2,
-                         partial_optim=lambda params: torch.optim.SGD(params, lr=0.1),
+                         partial_optimiser=lambda params: torch.optim.SGD(params, lr=0.1),
                          criterion=nn.CrossEntropyLoss())
         net = interject_by_match(net, node_types.Activations.is_relu, lp)
         loader = DataLoader(
@@ -94,7 +94,7 @@ class TestLinearProbes(unittest.TestCase):
     def test_accepts_non_contiguous_activations(self):
         lp = LinearProbe(
             2,
-            partial_optim=lambda params: torch.optim.SGD(params, lr=0.1),
+            partial_optimiser=lambda params: torch.optim.SGD(params, lr=0.1),
             criterion=nn.CrossEntropyLoss(),
         )
         net = interject_by_name(nn.Sequential(nn.Identity()), "0", lp)
@@ -111,7 +111,7 @@ class TestLinearProbes(unittest.TestCase):
     def test_per_class_wrapper_replays_probe_registration(self):
         analyser = PerClassAnalyser(LinearProbe(
             2,
-            partial_optim=lambda params: torch.optim.SGD(params, lr=0.1),
+            partial_optimiser=lambda params: torch.optim.SGD(params, lr=0.1),
             criterion=nn.CrossEntropyLoss(),
         ))
         net = interject_by_name(nn.Sequential(nn.Identity()), "0", analyser)
@@ -141,7 +141,7 @@ class TestLinearProbes(unittest.TestCase):
 
         probe = LinearProbe(
             2,
-            partial_optim=lambda params: torch.optim.SGD(params, lr=0.1),
+            partial_optimiser=lambda params: torch.optim.SGD(params, lr=0.1),
             criterion=nn.CrossEntropyLoss(),
         )
         watched_model = interject_by_match(

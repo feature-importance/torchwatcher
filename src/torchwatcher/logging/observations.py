@@ -12,11 +12,11 @@ ObservationPath = tuple[str, ...]
 """The canonical immutable path of an observation series."""
 
 ObservationPathInput = str | Sequence[str]
-"""A path form accepted and normalized by :class:`Observation`."""
+"""A path form accepted and normalised by :class:`Observation`."""
 
 
 def normalise_observation_path(path: ObservationPathInput) -> ObservationPath:
-    """Normalize an observation path to its canonical tuple representation.
+    """Normalise an observation path to its canonical tuple representation.
 
     A string is treated as one path component and is never split. Other
     accepted sequences are copied into an immutable tuple.
@@ -80,11 +80,11 @@ class Observation:
 
     The value is intentionally unconstrained. Producers may emit scalars,
     tensors or structured results; sinks decide which values they support and
-    how those values are serialized.
+    how those values are serialised.
 
     Args:
         path: A string or non-empty sequence of strings identifying the
-            observation series. It is normalized to :class:`ObservationPath`.
+            observation series. It is normalised to :class:`ObservationPath`.
         value: The observed value.
         context: Where the observation was made.
         metadata: Additional descriptive information about the series.

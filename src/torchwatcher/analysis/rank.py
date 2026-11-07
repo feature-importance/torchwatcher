@@ -203,7 +203,7 @@ class RankAnalyser(Analyser):
             rec['features_dim'] = self.features_dim[name]
 
             norm = min(self.features_dim[name], sampled_dimension)
-            rec['normalized_features_rank'] = rank / norm
+            rec['normalised_features_rank'] = rank / norm
 
             return rec
         except LinAlgError:
@@ -307,6 +307,6 @@ class CovarianceSpectrumStatisticsAnalyser(RankAnalyser):
         stats['features_dim'] = self.features_dim[name]
 
         norm = covariance.shape[0]
-        stats['normalized_features_rank'] = stats['features_rank'] / norm
+        stats['normalised_features_rank'] = stats['features_rank'] / norm
 
         return stats

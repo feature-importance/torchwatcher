@@ -121,7 +121,7 @@ def test_parameter_tracker_flattens_nested_measurements():
     assert sink.observations[1].value.shape == (2,)
 
 
-def test_parameter_tracker_records_post_optimizer_values():
+def test_parameter_tracker_records_post_optimiser_values():
     model = nn.Linear(1, 1, bias=False)
     with torch.no_grad():
         model.weight.fill_(1)
@@ -152,7 +152,7 @@ def test_parameter_tracker_records_post_optimizer_values():
     assert sink.observations[0].context.event == "step"
 
 
-def test_parameter_tracker_records_actual_optimizer_step():
+def test_parameter_tracker_records_actual_optimiser_step():
     model = nn.Linear(1, 1, bias=False)
     with torch.no_grad():
         model.weight.fill_(1)
@@ -168,7 +168,7 @@ def test_parameter_tracker_records_actual_optimizer_step():
             "norm": lambda step, info, state: torch.linalg.vector_norm(step),
         },
         sink,
-        event="optimizer_step",
+        event="optimiser_step",
     )
     trial = torchbearer.Trial(
         model,
@@ -193,12 +193,12 @@ def test_parameter_tracker_records_actual_optimizer_step():
         for item in sink.observations
     )
     assert all(
-        item.context.event == "optimizer_step"
+        item.context.event == "optimiser_step"
         for item in sink.observations
     )
 
 
-def test_optimizer_step_schedule_is_checked_before_snapshotting():
+def test_optimiser_step_schedule_is_checked_before_snapshotting():
     model = nn.Linear(1, 1, bias=False)
     sink = InMemorySink()
     tracker = ParameterTracker(
@@ -206,7 +206,7 @@ def test_optimizer_step_schedule_is_checked_before_snapshotting():
         {"value": lambda step, info, state: step},
         sink,
         schedule=AtSteps(2),
-        event="optimizer_step",
+        event="optimiser_step",
     )
     state = {
         torchbearer.MODEL: model,
@@ -231,14 +231,14 @@ def test_optimizer_step_schedule_is_checked_before_snapshotting():
     assert sink.observations[0].context.global_step == 2
 
 
-def test_optimizer_step_requires_paired_backward_event():
+def test_optimiser_step_requires_paired_backward_event():
     model = nn.Linear(1, 1)
     sink = InMemorySink()
     tracker = ParameterTracker(
         [model.weight],
         {"value": lambda step, info, state: step},
         sink,
-        event="optimizer_step",
+        event="optimiser_step",
     )
     state = {
         torchbearer.MODEL: model,

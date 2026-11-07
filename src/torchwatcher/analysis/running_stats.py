@@ -14,7 +14,7 @@ Built-in runningstats objects include:
     Mean - produces mean().
     Variance - mean() and variance() and stdev().
     Covariance - mean(), covariance(), correlation(), variance(), stdev().
-    SecondMoment - moment() is the non-mean-centered covariance, E[x x^T].
+    SecondMoment - moment() is the non-mean-centred covariance, E[x x^T].
     Quantile - quantile(), min(), max(), median(), mean(), variance(), stdev().
     TopK - topk() returns (values, indexes).
     Bincount - bincount() histograms nonnegative integer data.
@@ -26,7 +26,7 @@ Built-in runningstats objects include:
 
 Add more running stats by subclassing the Stat class.
 
-These statistics are vectorized along dim>=1, so stat.add()
+These statistics are vectorised along dim>=1, so stat.add()
 should supply a two-dimensional input where the zeroth
 dimension is the batch/sampling dimension and the first
 dimension is the feature dimension.
@@ -154,8 +154,8 @@ class Stat(ABC):
     """Abstract base class for a running pytorch statistic."""
 
     def __init__(self, state):
-        """By convention, all Stat subclasses can be initialized by passing
-        state=; and then they will initialize by calling load_state_dict.
+        """By convention, all Stat subclasses can be initialised by passing
+        state=; and then they will initialise by calling load_state_dict.
         """
         self.load_state_dict(resolve_state_dict(state))
 
@@ -202,7 +202,7 @@ class Stat(ABC):
         """Moves this Stat to the default cuda device."""
         self.to_("cuda")
 
-    def _normalize_add_shape(self, x, attr="data_shape"):
+    def _normalise_add_shape(self, x, attr="data_shape"):
         """Flattens input data to 2d."""
         if not torch.is_tensor(x):
             x = torch.tensor(x)
@@ -238,7 +238,7 @@ class Mean(Stat):
         self.data_shape = None
 
     def add(self, a):
-        a = self._normalize_add_shape(a)
+        a = self._normalise_add_shape(a)
         if len(a) == 0:
             return
         batch_count = a.shape[0]
@@ -311,18 +311,18 @@ class Variance(Stat):
         self.data_shape = None
 
     def add(self, a):
-        a = self._normalize_add_shape(a)
+        a = self._normalise_add_shape(a)
         if len(a) == 0:
             return
         batch_count = a.shape[0]
         batch_mean = a.sum(0) / batch_count
-        centered = a - batch_mean
+        centred = a - batch_mean
         self.batchcount += 1
         # Initial batch.
         if self._mean is None:
             self.count = batch_count
             self._mean = batch_mean
-            self.v_cmom2 = centered.pow(2).sum(0)
+            self.v_cmom2 = centred.pow(2).sum(0)
             return
         # Update a batch using Chan-style update for numerical stability.
         oldcount = self.count
@@ -331,7 +331,7 @@ class Variance(Stat):
         delta = batch_mean - self._mean
         self._mean.add_(delta * (batch_count / new_count))
         # Update the variance using the batch deviation
-        self.v_cmom2.add_(centered.pow(2).sum(0))
+        self.v_cmom2.add_(centred.pow(2).sum(0))
         self.v_cmom2.add_(
             delta.pow(2) * (oldcount * batch_count / new_count)
         )
@@ -396,7 +396,7 @@ class Covariance(Stat):
         self.data_shape = None
 
     def add(self, a):
-        a = self._normalize_add_shape(a)
+        a = self._normalise_add_shape(a)
         if len(a) == 0:
             return
         batch_count = a.shape[0]
@@ -404,8 +404,8 @@ class Covariance(Stat):
         if self._mean is None:
             self.count = batch_count
             self._mean = a.sum(0) / batch_count
-            centered = a - self._mean
-            self.cmom2 = centered.t().mm(centered)
+            centred = a - self._mean
+            self.cmom2 = centred.t().mm(centred)
             return
         # Update a batch using Chan-style update for numerical stability.
         self.count += batch_count
@@ -462,7 +462,7 @@ class Covariance(Stat):
 
 
 class SecondMoment(Stat):
-    """Running computation. Use this when the entire non-centered 2nd-moment
+    """Running computation. Use this when the entire non-centred 2nd-moment
     'covariance-like' matrix is needed, and when the whole matrix fits
     in the GPU.
     """
@@ -477,7 +477,7 @@ class SecondMoment(Stat):
         self.split_batch = split_batch
 
     def add(self, a):
-        a = self._normalize_add_shape(a)
+        a = self._normalise_add_shape(a)
         if len(a) == 0:
             return
         # Initial batch reveals the shape of the data.
@@ -593,9 +593,9 @@ class CrossCovariance(Stat):
         if self._mean is None:
             self.count = batch_count
             self._mean = [d.sum(0) / batch_count for d in [a, b]]
-            centered = [d - bm for d, bm in zip([a, b], self._mean)]
-            self.v_cmom2 = [c.pow(2).sum(0) for c in centered]
-            self.cmom2 = centered[0].t().mm(centered[1])
+            centred = [d - bm for d, bm in zip([a, b], self._mean)]
+            self.v_cmom2 = [c.pow(2).sum(0) for c in centred]
+            self.cmom2 = centred[0].t().mm(centred[1])
             return
         # Update a batch using Chan-style update for numerical stability.
         self.count += batch_count
@@ -668,7 +668,7 @@ def _float_from_bool(a):
     """Since pytorch only supports matrix multiplication on float,
     IoU computations are done using floating point types.
 
-    This function binarizes the input (positive to True and
+    This function binarises the input (positive to True and
     nonpositive to False), and converts from bool to float.
     If the data is already a floating-point type, it leaves
     it keeps the same type; otherwise it uses float.
@@ -795,7 +795,7 @@ class CrossIoU(Stat):
 
 
 class Quantile(Stat):
-    """Streaming randomized quantile computation for torch.
+    """Streaming randomised quantile computation for torch.
 
     Add any amount of data repeatedly via add(data).  At any time,
     quantile estimates be read out using quantile(q).
@@ -1154,9 +1154,9 @@ class Quantile(Stat):
     def readout(self, count=1001):
         return self.quantiles(torch.linspace(0.0, 1.0, count))
 
-    def normalize(self, data):
-        """Given input data as taken from the training distirbution,
-        normalizes every channel to reflect quantile values,
+    def normalise(self, data):
+        """Given input data as taken from the training distribution,
+        normalises every channel to reflect quantile values,
         uniformly distributed, within [0, 1].
         """
         assert self.count > 0
@@ -1856,7 +1856,7 @@ def _unit_test():
     assert all(cs.i.iou()[1:, 0] < 1)
     assert all(cs.i.iou()[1:, 0] == cs.i.iou()[0, 1:])
 
-    # Randomized quantile test
+    # Randomised quantile test
     qc = cs.qc
     ro = qc.readout(1001).cpu()
     endtime = time.time()
@@ -1865,7 +1865,7 @@ def _unit_test():
             + (torch.arange(qc.depth, dtype=torch.float) * amount)[:, None]
     )
     maxreldev = torch.max(torch.abs(ro - gt) / amount) * quantiles
-    print("Randomized quantile test results:")
+    print("Randomised quantile test results:")
     print("Maximum relative deviation among %d perentiles: %f" % (quantiles, maxreldev))
     minerr = torch.max(
         torch.abs(
@@ -1897,7 +1897,7 @@ def _unit_test():
     ).item()
     print("Count error: %f" % counterr)
     print("Time %f" % (endtime - starttime))
-    # Algorithm is randomized, so some of these will fail with low probability.
+    # Algorithm is randomised, so some of these will fail with low probability.
     assert maxreldev < 1.0
     assert minerr == 0.0
     assert maxerr == 0.0

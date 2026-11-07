@@ -87,14 +87,14 @@ def _(nn, resnet18, sel):
         },
         sink,
         schedule=EveryNSteps(10),
-        event="optimizer_step"
+        event="optimiser_step"
     )
 
     data = MNIST(root="/Users/jsh2/Data/", train=True, transform=Compose([ToTensor(), v2.RGB()]))
     loader = torch.utils.data.DataLoader(data, shuffle=True, batch_size=32)
 
-    optim = torch.optim.Adam(sel.is_weight.parameters(model2), 0.001)
-    trial = Trial(model2, optim, nn.CrossEntropyLoss(), metrics=["acc"], callbacks=[tracker]).to("mps")
+    optimiser = torch.optim.Adam(sel.is_weight.parameters(model2), 0.001)
+    trial = Trial(model2, optimiser, nn.CrossEntropyLoss(), metrics=["acc"], callbacks=[tracker]).to("mps")
     trial.with_train_generator(loader).run(4)
     return (
         Compose,
@@ -138,20 +138,20 @@ def _(frame, path_contains):
     for layer in layers:
         fig, ax1 = plt.subplots()
 
-        color = 'tab:red'
+        colour = 'tab:red'
         ax1.set_title('.'.join(layer))
         ax1.set_xlabel('step')
-        ax1.set_ylabel('gradient_norm', color=color)
+        ax1.set_ylabel('gradient_norm', color=colour)
         ax1.set_ylim(0, max_grad)
-        sns.lineplot(path_contains(frame, [*layer, "gradient_norm"]), x="global_step", y="value", color=color, ax=ax1)
-        ax1.tick_params(axis='y', labelcolor=color)
+        sns.lineplot(path_contains(frame, [*layer, "gradient_norm"]), x="global_step", y="value", color=colour, ax=ax1)
+        ax1.tick_params(axis='y', labelcolor=colour)
     
         ax2 = ax1.twinx()  # instantiate a second Axes that shares the same x-axis
         ax2.set_ylim(0, max_update)
-        color = 'tab:blue'
-        ax2.set_ylabel('update_norm', color=color)  # we already handled the x-label with ax1
-        sns.lineplot(path_contains(frame, [*layer, "update_norm"]), x="global_step", y="value", color=color, ax=ax2)
-        ax2.tick_params(axis='y', labelcolor=color)
+        colour = 'tab:blue'
+        ax2.set_ylabel('update_norm', color=colour)  # we already handled the x-label with ax1
+        sns.lineplot(path_contains(frame, [*layer, "update_norm"]), x="global_step", y="value", color=colour, ax=ax2)
+        ax2.tick_params(axis='y', labelcolor=colour)
     
         fig.tight_layout()  # otherwise the right y-label is slightly clipped
         plt.show()
@@ -188,29 +188,29 @@ def _(
             {"update_norm": lambda step, info, state: step.norm()},
             sink,
             schedule=EveryNSteps(steps),
-            event="optimizer_step"
+            event="optimiser_step"
         )
 
         model = deepcopy(base)
-        optim = torch.optim.Adam(sel.is_weight.parameters(model), 0.001)
-        trial = Trial(model, optim, nn.CrossEntropyLoss(), metrics=["acc"], callbacks=[tracker]).to("mps")
+        optimiser = torch.optim.Adam(sel.is_weight.parameters(model), 0.001)
+        trial = Trial(model, optimiser, nn.CrossEntropyLoss(), metrics=["acc"], callbacks=[tracker]).to("mps")
         trial.with_train_generator(loader).run(epochs)
 
 
         model = deepcopy(base).to('mps')
-        optim = torch.optim.Adam(sel.is_weight.parameters(model), 0.001)
+        optimiser = torch.optim.Adam(sel.is_weight.parameters(model), 0.001)
 
         trace = []
         counter = 1
         for epoch in range(epochs):
             for (X, y) in tqdm(loader):
-                optim.zero_grad()
+                optimiser.zero_grad()
                 pred = model(X.to('mps'))
                 loss = nn.functional.cross_entropy(pred, y.to('mps'))
                 loss.backward()
 
                 before = model.conv1.weight.clone()
-                optim.step()
+                optimiser.step()
                 after = model.conv1.weight.clone()
 
                 if counter % steps == 0:

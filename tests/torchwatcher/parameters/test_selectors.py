@@ -227,10 +227,10 @@ def test_parameters_returns_selected_parameters_directly():
     )
 
 
-def test_selector_parameters_can_construct_an_optimizer_group():
+def test_selector_parameters_can_construct_an_optimiser_group():
     model = ExampleModel()
 
-    optimizer = torch.optim.SGD(
+    optimiser = torch.optim.SGD(
         selectors.is_weight.parameters(model),
         lr=0.1,
     )
@@ -238,7 +238,7 @@ def test_selector_parameters_can_construct_an_optimizer_group():
     assert all(
         actual is expected
         for actual, expected in zip(
-            optimizer.param_groups[0]["params"],
+            optimiser.param_groups[0]["params"],
             [
                 model.features[0].weight,
                 model.features[1].weight,

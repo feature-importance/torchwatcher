@@ -116,7 +116,7 @@ def test_selected_parameters_callback_supports_explicit_events():
         assert calls == [event]
 
 
-def test_selected_parameters_callback_runs_before_optimizer_step():
+def test_selected_parameters_callback_runs_before_optimiser_step():
     model = nn.Linear(1, 1, bias=False)
     original_weight = model.weight.detach().clone()
     loader = DataLoader(

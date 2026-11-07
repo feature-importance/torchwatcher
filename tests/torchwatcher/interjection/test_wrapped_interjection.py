@@ -784,7 +784,7 @@ class _CompositeLinear(nn.Module):
         return self.linear(inputs)
 
 
-def test_wrapped_composite_leaf_optimizer_update_is_shared_between_modes():
+def test_wrapped_composite_leaf_optimiser_update_is_shared_between_modes():
     source = nn.Sequential(_CompositeLinear())
     analyser = NameAnalyser()
     watched_model = interject_by_module_class(
@@ -1180,7 +1180,7 @@ def test_interjected_checkpoint_preserves_original_shared_alias_names():
     watched_model.load_state_dict(source.state_dict(), strict=True)
 
 
-def test_original_checkpoint_keeps_auxiliary_interjection_state_initialized():
+def test_original_checkpoint_keeps_auxiliary_interjection_state_initialised():
     source = nn.Sequential(nn.Linear(2, 1))
     interjection = _StatefulInterjection()
     watched_model = interject_by_module_class(

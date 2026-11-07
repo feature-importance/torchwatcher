@@ -85,7 +85,7 @@ def observation_context(
     Args:
         state: The current Torchbearer state.
         event: The lifecycle event associated with the observation.
-        next_step: Associate the observation with the upcoming optimizer step
+        next_step: Associate the observation with the upcoming optimiser step
             rather than the number of steps already completed. This is useful
             for gradients and other pre-step observations.
     """

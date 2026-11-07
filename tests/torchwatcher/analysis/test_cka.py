@@ -13,7 +13,7 @@ def _linear_cka(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
     left_gram = left.flatten(1) @ left.flatten(1).t()
     right_gram = right.flatten(1) @ right.flatten(1).t()
 
-    def center(gram):
+    def centre(gram):
         return (
             gram
             - gram.mean(dim=0, keepdim=True)
@@ -21,8 +21,8 @@ def _linear_cka(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
             + gram.mean()
         )
 
-    left_gram = center(left_gram)
-    right_gram = center(right_gram)
+    left_gram = centre(left_gram)
+    right_gram = centre(right_gram)
     return (left_gram * right_gram).sum() / torch.sqrt(
         left_gram.square().sum() * right_gram.square().sum()
     )

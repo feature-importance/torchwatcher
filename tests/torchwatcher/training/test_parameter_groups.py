@@ -34,17 +34,17 @@ def test_build_parameter_groups_adds_unmatched_parameters_as_default_group():
     }
 
 
-def test_build_parameter_groups_constructs_a_pytorch_optimizer():
+def test_build_parameter_groups_constructs_a_pytorch_optimiser():
     model = ExampleModel()
     groups = build_parameter_groups(
         model,
         ParameterGroup(selectors.is_bias, weight_decay=0.0),
     )
 
-    optimizer = torch.optim.AdamW(groups, lr=1e-3, weight_decay=0.01)
+    optimiser = torch.optim.AdamW(groups, lr=1e-3, weight_decay=0.01)
 
-    assert optimizer.param_groups[0]["weight_decay"] == 0.0
-    assert optimizer.param_groups[1]["weight_decay"] == 0.01
+    assert optimiser.param_groups[0]["weight_decay"] == 0.0
+    assert optimiser.param_groups[1]["weight_decay"] == 0.01
 
 
 def test_build_parameter_groups_preserves_group_declaration_order():

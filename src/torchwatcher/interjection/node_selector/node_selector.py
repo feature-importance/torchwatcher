@@ -38,7 +38,7 @@ class NodeSelector:
             # Keyword Arguments:
             selector_function: Optional[SelectorFunction] = None
     ) -> None:
-        """Initializes ``NodeSelector``.
+        """Initialises ``NodeSelector``.
 
         Args:
             selector_function: The selector function of form
@@ -608,20 +608,19 @@ def matches_module_lambda(lam: Callable[[Module], bool]) -> NodeSelector:
     return NodeSelector(lambda n: _matches(n, lam))
 
 
-def _is_node_parametrized(
+def _is_node_parametrised(
         # Arguments:
         nodestate: NodeState
 ) -> bool:
-    """Given a nodestate from a graph, determine if the node is from a parametrized
-    module.
+    """Determine whether a graph node is from a parametrised module.
 
     Args:
       nodestate (NodeState):
-        The nodestate to check.
+        The node state to check.
 
     Returns:
       bool:
-        Whether the node in the nodestate is from a parametrized node.
+        Whether the node is from a parametrised module.
     """
     named_modules: Dict[str, Module] = dict(nodestate[0].named_modules())
     if nodestate[1].op != "call_module":
@@ -632,14 +631,12 @@ def _is_node_parametrized(
     return False
 
 
-is_parametrized: NodeSelector = NodeSelector(
-    _is_node_parametrized
+is_parametrised: NodeSelector = NodeSelector(
+    _is_node_parametrised
 )
 """
-A node selector which is true for all layers with parametrizations.
+A node selector which is true for all layers with parametrisations.
 """
-# Aliases:
-is_parametrised = is_parametrized
 
 is_module: NodeSelector = NodeSelector(
     lambda x: (x[1].op == "call_module")

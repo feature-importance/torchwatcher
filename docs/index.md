@@ -23,7 +23,7 @@ the FX graph, TorchWatcher can target module calls as well as operations such as
 - [Rewriting model graphs](guides/rewriting-graphs.md) introduces module
   replacement.
 - [Selecting model parameters](guides/parameter-selection.md) covers selectors
-  and optimizer parameter groups.
+  and optimiser parameter groups.
 - [Logging observations](guides/observation-logging.md) describes the
   storage-independent observation format and sinks.
 - [Drawing model graphs](guides/drawing-model-graphs.md) shows how to inspect

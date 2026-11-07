@@ -7,7 +7,6 @@ from .node_selector import (
     has_preceding,
     is_module,
     is_parametrised,
-    is_parametrized,
     last,
     match_slice,
     matches_module_class,
@@ -26,7 +25,7 @@ from .node_types import (
     Linear,
     Loss,
     MultiNodeSelector,
-    Normalization,
+    Normalisation,
     Padding,
     Pooling,
     Recurrent,
@@ -107,12 +106,12 @@ convolution layers with padding internal.
 # Aliases:
 is_pad = Padding.is_padding
 
-is_norm = Normalization.is_normalization
+is_norm = Normalisation.is_normalisation
 """
-A node selector which is true for all nodes performing normalization.
+A node selector which is true for all nodes performing normalisation.
 """
-# Aliases:
-is_normalization, is_normalisation = Normalization.is_normalization, Normalization.is_normalization
+# Alias:
+is_normalisation = Normalisation.is_normalisation
 
 is_recurrent = Recurrent.is_recurrent
 """
@@ -192,7 +191,7 @@ __all__ = [
     "MultiNodeSelector",
     "NodeSelector",
     "NodeState",
-    "Normalization",
+    "Normalisation",
     "Padding",
     "Pooling",
     "Recurrent",
@@ -222,11 +221,9 @@ __all__ = [
     "is_module",
     "is_norm",
     "is_normalisation",
-    "is_normalization",
     "is_pad",
     "is_padding",
     "is_parametrised",
-    "is_parametrized",
     "is_pool",
     "is_pooling",
     "is_recurrent",

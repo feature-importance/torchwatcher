@@ -9,7 +9,6 @@ import torch
 from torch.fx.passes.graph_drawer import FxGraphDrawer, _WEIGHT_TEMPLATE, _COLOR_MAP, _HASH_COLOR_MAP
 from torch.fx.passes.shape_prop import TensorMetadata
 from torchwatcher.analysis import Analyser
-from torchwatcher.analysis.analysis import PerClassAnalyser
 from torchwatcher.interjection.tracing import DualGraphModule, trace_shapes
 from torchwatcher.interjection import WrappedForwardInterjection, ForwardInterjection
 
@@ -49,7 +48,7 @@ class SubmoduleFxGraphDrawer(FxGraphDrawer):
         if node.op in _COLOR_MAP:
             template["fillcolor"] = _COLOR_MAP[node.op]
         else:
-            # Use a random color for each node; based on its name so it's stable.
+            # Use a random colour for each node, based on its stable name.
             target_name = node._pretty_print_target(node.target)
             target_hash = int(
                 hashlib.md5(
@@ -406,7 +405,7 @@ class ShapeFxGraphDrawer(SubmoduleFxGraphDrawer):
         if node.op in _COLOR_MAP:
             template["fillcolor"] = _COLOR_MAP[node.op]
         else:
-            # Use a random color for each node; based on its name so it's stable.
+            # Use a random colour for each node, based on its stable name.
             target_name = node._pretty_print_target(node.target)
             target_hash = int(
                 hashlib.md5(
@@ -427,11 +426,11 @@ def draw_graph(
         skip_node_names_in_args: bool = True,
         parse_stack_trace: bool = False,
         dot_graph_shape: Optional[str] = None,
-        normalize_args: bool = False) -> pydot.Dot:
+        normalise_args: bool = False) -> pydot.Dot:
 
     return SubmoduleFxGraphDrawer(module.graphmodule, module.graph_name, ignore_getattr,
                                   ignore_parameters_and_buffers, skip_node_names_in_args,
-                                  parse_stack_trace, dot_graph_shape, normalize_args).get_dot_graph()
+                                  parse_stack_trace, dot_graph_shape, normalise_args).get_dot_graph()
 
 
 def draw_graph_pretty(

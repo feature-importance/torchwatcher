@@ -26,13 +26,13 @@ from torchwatcher.training.scheduling import (
 
 
 ParameterMeasurement = Callable[[ParameterInfo, Any], Any]
-OptimizerStepMeasurement = Callable[[torch.Tensor, ParameterInfo, Any], Any]
+OptimiserStepMeasurement = Callable[[torch.Tensor, ParameterInfo, Any], Any]
 
 _TRACKING_EVENTS = {
     "on_start": "start",
     "on_backward": "backward",
     "on_step_training": "step",
-    "optimizer_step": "optimizer_step",
+    "optimiser_step": "optimiser_step",
 }
 
 
@@ -40,7 +40,7 @@ class ParameterTracker(Callback):
     """Record measurements of selected parameters during training.
 
     For ordinary events, measurements receive a :class:`ParameterInfo` and the
-    Torchbearer state. For ``optimizer_step``, they receive the applied step,
+    Torchbearer state. For ``optimiser_step``, they receive the applied step,
     the :class:`ParameterInfo` and state. Measurements may return scalars,
     tensors or nested mappings. Nested mappings are flattened into separate
     observations by extending the observation path.
@@ -50,14 +50,14 @@ class ParameterTracker(Callback):
             or an iterable of parameters registered on that model.
         measurements: A non-empty mapping from observation names to callables
             receiving ``(parameter_info, state)``. With
-            ``event="optimizer_step"``, callables instead receive
+            ``event="optimiser_step"``, callables instead receive
             ``(step, parameter_info, state)``.
         sink: The destination for recorded observations.
         schedule: The observation schedule. By default, record every step,
             including step zero when tracking ``on_start``.
         event: The Torchbearer event at which measurements are made. Supported
             values are ``on_start``, ``on_backward`` and
-            ``on_step_training``. Use ``optimizer_step`` to pair a pre-step
+            ``on_step_training``. Use ``optimiser_step`` to pair a pre-step
             snapshot with the post-step parameter and measure their difference.
         clock: A clock to share with other training observers. A new clock is
             created when omitted.
@@ -68,7 +68,7 @@ class ParameterTracker(Callback):
             selector_or_parameters: ParameterSelector | Iterable[nn.Parameter],
             measurements: Mapping[
                 str,
-                ParameterMeasurement | OptimizerStepMeasurement,
+                ParameterMeasurement | OptimiserStepMeasurement,
             ],
             sink: ObservationSink,
             *,
@@ -121,15 +121,15 @@ class ParameterTracker(Callback):
             self._record(state)
 
     def on_backward(self, state) -> None:
-        if self.event == "optimizer_step":
-            self._capture_optimizer_step(state)
+        if self.event == "optimiser_step":
+            self._capture_optimiser_step(state)
         elif self.event == "on_backward":
             self._record(state)
 
     def on_step_training(self, state) -> None:
         self.clock.on_step_training(state)
-        if self.event == "optimizer_step":
-            self._record_optimizer_step(state)
+        if self.event == "optimiser_step":
+            self._record_optimiser_step(state)
         elif self.event == "on_step_training":
             self._record(state)
 
@@ -147,7 +147,9 @@ class ParameterTracker(Callback):
         return self
 
     def _record(self, state) -> None:
-        selected = self.selected
+        # Resolve eagerly so tracking before ``on_start`` fails even when the
+        # schedule would skip this observation.
+        _ = self.selected
         context = self.clock.context(
             state,
             _TRACKING_EVENTS[self.event],
@@ -164,7 +166,7 @@ class ParameterTracker(Callback):
             ),
         )
 
-    def _capture_optimizer_step(self, state) -> None:
+    def _capture_optimiser_step(self, state) -> None:
         selected = self.selected
         context = self.clock.context(
             state,
@@ -181,7 +183,7 @@ class ParameterTracker(Callback):
         }
         self._pending_step = context, before
 
-    def _record_optimizer_step(self, state) -> None:
+    def _record_optimiser_step(self, state) -> None:
         pending = self._pending_step
         self._pending_step = None
         if pending is None:
@@ -194,7 +196,7 @@ class ParameterTracker(Callback):
         )
         if completed_context.global_step != context.global_step:
             raise RuntimeError(
-                "optimizer-step snapshot does not match the completed step"
+                "optimiser-step snapshot does not match the completed step"
             )
 
         steps = {
@@ -242,10 +244,10 @@ class ParameterTracker(Callback):
 def _validate_measurements(
         measurements: Mapping[
             str,
-            ParameterMeasurement | OptimizerStepMeasurement,
+            ParameterMeasurement | OptimiserStepMeasurement,
         ],
 ) -> tuple[
-    tuple[str, ParameterMeasurement | OptimizerStepMeasurement],
+    tuple[str, ParameterMeasurement | OptimiserStepMeasurement],
     ...,
 ]:
     if not isinstance(measurements, Mapping):
@@ -264,7 +266,7 @@ def _validate_measurements(
 
 
 __all__ = [
-    "OptimizerStepMeasurement",
+    "OptimiserStepMeasurement",
     "ParameterMeasurement",
     "ParameterTracker",
 ]
