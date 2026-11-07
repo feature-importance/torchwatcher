@@ -2,6 +2,7 @@ import copy
 import importlib
 import inspect
 from contextvars import ContextVar
+from types import MethodType
 from typing import Type, Optional, Dict, Any, Union, Callable
 
 import math
@@ -98,6 +99,69 @@ def _state_shapes_mismatch(expected, supplied):
     return supplied.shape != expected.shape
 
 
+def _load_from_state_dict_with_current_version(
+        module,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_messages,
+):
+    """Supply metadata before a custom ``_load_from_state_dict`` runs."""
+    local_metadata.setdefault("version", module._version)
+    patch_state = module.__dict__["_torchwatcher_version_load_patch"]
+    return patch_state["original"](
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_messages,
+    )
+
+
+def _patch_current_module_version(module):
+    """Temporarily wrap loading where nested metadata is unavailable."""
+    patch_state = module.__dict__.get("_torchwatcher_version_load_patch")
+    if patch_state is None:
+        patch_state = {
+            "original": module._load_from_state_dict,
+            "had_instance_attribute": (
+                "_load_from_state_dict" in module.__dict__
+            ),
+            "instance_attribute": module.__dict__.get(
+                "_load_from_state_dict"
+            ),
+            "users": 0,
+        }
+        module.__dict__["_torchwatcher_version_load_patch"] = patch_state
+        object.__setattr__(
+            module,
+            "_load_from_state_dict",
+            MethodType(_load_from_state_dict_with_current_version, module),
+        )
+    patch_state["users"] += 1
+
+
+def _unpatch_current_module_version(module):
+    patch_state = module.__dict__["_torchwatcher_version_load_patch"]
+    patch_state["users"] -= 1
+    if patch_state["users"]:
+        return
+    if patch_state["had_instance_attribute"]:
+        object.__setattr__(
+            module,
+            "_load_from_state_dict",
+            patch_state["instance_attribute"],
+        )
+    else:
+        object.__delattr__(module, "_load_from_state_dict")
+    del module.__dict__["_torchwatcher_version_load_patch"]
+
+
 def _dual_graph_state_dict_hook(
         module,
         state_dict,
@@ -120,6 +184,37 @@ def _dual_graph_state_dict_hook(
                 if logical_key not in state_dict:
                     state_dict[logical_key] = state_dict[key]
             del state_dict[key]
+
+    source_module = module.__dict__["_torchwatcher_source_module"][0]
+    keep_vars = module.__dict__.pop(
+        "_torchwatcher_state_dict_keep_vars",
+        False,
+    )
+    source_state = (
+        source_module.state_dict(keep_vars=keep_vars)
+        if source_module is not None
+        else None
+    )
+    if source_state is not None:
+        for source_name in module._source_only_state_names:
+            state_dict[f"{prefix}{source_name}"] = source_state[source_name]
+
+        # FX emits state in graph-use order. Re-establish the source module's
+        # traversal order so the public checkpoint is indistinguishable from
+        # the original module, then retain analyser-only entries afterwards.
+        source_keys = [
+            f"{prefix}{source_name}"
+            for source_name in source_state
+            if f"{prefix}{source_name}" in state_dict
+        ]
+        source_key_set = set(source_keys)
+        auxiliary_keys = [
+            key for key in state_dict
+            if key.startswith(prefix) and key not in source_key_set
+        ]
+        for key in source_keys + auxiliary_keys:
+            value = state_dict.pop(key)
+            state_dict[key] = value
 
     metadata = getattr(state_dict, "_metadata", None)
     if metadata is None:
@@ -145,6 +240,15 @@ def _dual_graph_state_dict_hook(
                     metadata[logical_key] = metadata[key]
             del metadata[key]
 
+    if source_state is not None:
+        source_metadata = getattr(source_state, "_metadata", {})
+        for source_name, source_local_metadata in source_metadata.items():
+            logical_key = ".".join(filter(None, (
+                logical_root,
+                source_name,
+            )))
+            metadata[logical_key] = source_local_metadata
+
 
 def _dual_graph_load_state_dict_pre_hook(
         module,
@@ -161,6 +265,19 @@ def _dual_graph_load_state_dict_pre_hook(
         "_torchwatcher_load_state_dict_prefixes",
         [],
     ).append(prefix)
+    version_patched_modules = []
+    seen_versioned_modules = set()
+    for (graph_name, module_name) in module._graph_module_to_source:
+        graph_child = getattr(module, graph_name).get_submodule(module_name)
+        if id(graph_child) in seen_versioned_modules:
+            continue
+        seen_versioned_modules.add(id(graph_child))
+        _patch_current_module_version(graph_child)
+        version_patched_modules.append(graph_child)
+    module.__dict__.setdefault(
+        "_torchwatcher_version_patched_modules",
+        [],
+    ).append(version_patched_modules)
     translated_keys = set()
     reported_shape_mismatches = set()
     relative_keys = {
@@ -268,11 +385,60 @@ def _dual_graph_load_state_dict_pre_hook(
                 # Preserve the analyser's current initialisation.
                 state_dict[graph_key] = value
 
-    if is_source_checkpoint:
+    source_module = module.__dict__["_torchwatcher_source_module"][0]
+    if source_module is not None:
+        source_state = source_module.state_dict(keep_vars=True)
+        source_state_objects = _state_objects(source_module)
         for source_name in module._source_state_names:
             source_key = f"{prefix}{source_name}"
-            if source_key in state_dict:
-                translated_keys.add(source_key)
+            if source_key not in state_dict:
+                if (
+                        source_name in module._source_only_state_names
+                        and source_key not in missing_keys
+                ):
+                    missing_keys.append(source_key)
+                continue
+
+            supplied_value = state_dict[source_key]
+            shape_mismatch = (
+                source_name in source_state_objects
+                and _state_shapes_mismatch(
+                    source_state_objects[source_name],
+                    supplied_value,
+                )
+            )
+            if shape_mismatch:
+                if source_key not in reported_shape_mismatches:
+                    error_messages.append(
+                        f"size mismatch for {source_key}: copying a param "
+                        f"with shape {supplied_value.shape} from checkpoint, "
+                        "the shape in current model is "
+                        f"{source_state[source_name].shape}."
+                    )
+                    reported_shape_mismatches.add(source_key)
+            else:
+                source_state[source_name] = supplied_value
+            translated_keys.add(source_key)
+
+        source_metadata = getattr(source_state, "_metadata", None)
+        if source_metadata is not None and metadata is not None:
+            logical_root = prefix[:-1]
+            for source_name in tuple(source_metadata):
+                logical_name = ".".join(filter(None, (
+                    logical_root,
+                    source_name,
+                )))
+                if logical_name in metadata:
+                    source_metadata[source_name] = metadata[logical_name]
+        assign = bool(_local_metadata.get("assign_to_params_buffers", False))
+        try:
+            source_module.load_state_dict(
+                source_state,
+                strict=True,
+                assign=assign,
+            )
+        except RuntimeError as error:
+            error_messages.append(str(error))
 
     for key in translated_keys:
         del state_dict[key]
@@ -280,6 +446,14 @@ def _dual_graph_load_state_dict_pre_hook(
 
 def _dual_graph_load_state_dict_post_hook(module, incompatible_keys):
     """Expose load diagnostics in the public checkpoint namespace."""
+    version_patch_stacks = module.__dict__[
+        "_torchwatcher_version_patched_modules"
+    ]
+    for patched_module in version_patch_stacks.pop():
+        _unpatch_current_module_version(patched_module)
+    if not version_patch_stacks:
+        del module.__dict__["_torchwatcher_version_patched_modules"]
+
     prefixes = module.__dict__["_torchwatcher_load_state_dict_prefixes"]
     prefix = prefixes.pop()
     if not prefixes:
@@ -331,7 +505,7 @@ def _build_dual_graph_state_mapping(
         original_module_copies=(),
 ):
     if source_module is None:
-        return frozenset(), {}, {}
+        return (), (), {}, {}
 
     source_objects = _state_objects(source_module)
     source_names_by_id: dict[int, list[str]] = {}
@@ -408,8 +582,18 @@ def _build_dual_graph_state_mapping(
             if checkpoint_names:
                 graph_to_source[(graph_name, state_name)] = checkpoint_names
 
+    source_state_names = tuple(source_module.state_dict())
+    mapped_source_names = {
+        source_name
+        for source_names in graph_to_source.values()
+        for source_name in source_names
+    }
     return (
-        frozenset(source_module.state_dict()),
+        source_state_names,
+        tuple(
+            name for name in source_state_names
+            if name not in mapped_source_names
+        ),
         graph_to_source,
         graph_module_to_source,
     )
@@ -428,6 +612,7 @@ class DualGraphModule(nn.Module):
         self.eval_module = eval_module
         (
             self._source_state_names,
+            self._source_only_state_names,
             self._graph_state_to_source,
             self._graph_module_to_source,
         ) = _build_dual_graph_state_mapping(
@@ -445,6 +630,10 @@ class DualGraphModule(nn.Module):
         self.register_load_state_dict_post_hook(
             _dual_graph_load_state_dict_post_hook
         )
+
+    def _save_to_state_dict(self, destination, prefix, keep_vars):
+        self.__dict__["_torchwatcher_state_dict_keep_vars"] = keep_vars
+        super()._save_to_state_dict(destination, prefix, keep_vars)
 
     @property
     def graphmodule(self):

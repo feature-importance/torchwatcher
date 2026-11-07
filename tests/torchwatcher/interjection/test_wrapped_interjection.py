@@ -85,6 +85,25 @@ class _ExtraStateBlock(nn.Module):
         return self.linear(inputs)
 
 
+class _PartiallyUnusedStateModel(nn.Module):
+    def __init__(self, extra_state=0):
+        super().__init__()
+        self.root_parameter = nn.Parameter(torch.ones(1))
+        self.register_buffer("root_buffer", torch.ones(1))
+        self.used = nn.Linear(2, 1)
+        self.unused = nn.Linear(2, 1)
+        self.extra_state = extra_state
+
+    def get_extra_state(self):
+        return self.extra_state
+
+    def set_extra_state(self, state):
+        self.extra_state = state
+
+    def forward(self, inputs):
+        return self.used(inputs)
+
+
 class _ExtraStateInterjection(_StatefulInterjection):
     def __init__(self):
         super().__init__()
@@ -1005,6 +1024,46 @@ def test_dual_graph_checkpoint_uses_logical_names_and_loads_strictly():
         )
 
 
+def test_dual_graph_checkpoint_preserves_state_unused_by_forward_graph():
+    source = _PartiallyUnusedStateModel(extra_state=23)
+    source.root_parameter.data.fill_(2.0)
+    source.root_buffer.fill_(3.0)
+    source.used.weight.data.fill_(4.0)
+    source.unused.weight.data.fill_(5.0)
+    watched_model = trace(_PartiallyUnusedStateModel())
+
+    watched_model.load_state_dict(source.state_dict(), strict=True)
+    checkpoint = watched_model.state_dict()
+
+    assert list(checkpoint) == list(source.state_dict())
+    for name, value in source.state_dict().items():
+        if torch.is_tensor(value):
+            torch.testing.assert_close(checkpoint[name], value)
+        else:
+            assert checkpoint[name] == value
+
+    restored = _PartiallyUnusedStateModel()
+    restored.load_state_dict(checkpoint, strict=True)
+    assert restored.extra_state == 23
+    torch.testing.assert_close(restored.root_parameter, torch.full((1,), 2.0))
+    torch.testing.assert_close(restored.root_buffer, torch.full((1,), 3.0))
+    torch.testing.assert_close(
+        restored.unused.weight,
+        torch.full_like(restored.unused.weight, 5.0),
+    )
+
+
+def test_missing_unused_source_state_is_reported_with_outer_prefix():
+    model = nn.Module()
+    model.watched = trace(_PartiallyUnusedStateModel())
+    checkpoint = model.state_dict()
+    del checkpoint["watched.unused.weight"]
+
+    incompatible = model.load_state_dict(checkpoint, strict=False)
+
+    assert incompatible.missing_keys == ["watched.unused.weight"]
+
+
 def test_interjected_checkpoint_uses_original_model_state_names():
     source = nn.Sequential(nn.Linear(2, 1))
     watched_model = interject_by_module_class(
@@ -1123,6 +1182,29 @@ def test_interjected_checkpoint_translates_module_version_metadata():
     restored = nn.Sequential(_VersionedLinear(2, 1))
     restored.load_state_dict(watched_model.state_dict(), strict=True)
     assert restored[0].loaded_versions == [_VersionedLinear._version]
+
+
+def test_nested_dual_graph_load_supplies_current_descendant_versions():
+    source = nn.Sequential(_VersionedLinear(2, 1))
+    watched_model = interject_by_module_class(
+        source,
+        _VersionedLinear,
+        _ModuleRecorder(),
+    )
+    source[0].loaded_versions.clear()
+    container = nn.Module()
+    container.watched = watched_model
+    checkpoint_source = nn.Module()
+    checkpoint_source.watched = nn.Sequential(_VersionedLinear(2, 1))
+
+    container.load_state_dict(checkpoint_source.state_dict(), strict=True)
+
+    assert source[0].loaded_versions
+    assert set(source[0].loaded_versions) == {_VersionedLinear._version}
+    assert all(
+        "_torchwatcher_version_load_patch" not in module.__dict__
+        for module in watched_model.modules()
+    )
 
 
 def test_interjected_checkpoint_translates_descendant_extra_state():
