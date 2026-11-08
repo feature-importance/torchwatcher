@@ -297,35 +297,57 @@ def _parameter_occurrences(
         model: nn.Module
 ) -> list[tuple[nn.Parameter, ParameterRegistration]]:
     occurrences = []
-    if isinstance(model, DualGraphModule):
-        for full_name, module, parameter_name, parameter in (
-                model.logical_parameter_registrations()):
-            module_name = full_name.rpartition(".")[0]
+
+    def visit(
+            module: nn.Module,
+            module_name: str,
+            ancestors: set[int],
+    ) -> None:
+        if isinstance(module, DualGraphModule):
+            for logical_name, owner, parameter_name, parameter in (
+                    module.logical_parameter_registrations()):
+                full_name = ".".join(filter(None, (
+                    module_name,
+                    logical_name,
+                )))
+                occurrences.append((parameter, ParameterRegistration(
+                    full_name=full_name,
+                    module_name=full_name.rpartition(".")[0],
+                    parameter_name=parameter_name,
+                    module=owner,
+                )))
+            return
+
+        # Some transparent wrappers expose a different logical owner through
+        # ``named_modules`` while retaining the same child registrations.
+        # Honour that contract just as the previous traversal did.
+        _logical_name, logical_owner = next(
+            module.named_modules(remove_duplicate=False)
+        )
+        for parameter_name, parameter in logical_owner._parameters.items():
+            if parameter is None:
+                continue
+            full_name = ".".join(filter(None, (
+                module_name,
+                parameter_name,
+            )))
             occurrences.append((parameter, ParameterRegistration(
                 full_name=full_name,
                 module_name=module_name,
                 parameter_name=parameter_name,
-                module=module,
+                module=logical_owner,
             )))
-        return occurrences
 
-    roots = (model,)
-    for root in roots:
-        for module_name, module in root.named_modules(remove_duplicate=False):
-            for parameter_name, parameter in module.named_parameters(
-                    recurse=False,
-                    remove_duplicate=False
-            ):
-                full_name = (
-                    f"{module_name}.{parameter_name}"
-                    if module_name else parameter_name
-                )
-                occurrences.append((parameter, ParameterRegistration(
-                    full_name=full_name,
-                    module_name=module_name,
-                    parameter_name=parameter_name,
-                    module=module,
-                )))
+        for child_name, child in module._modules.items():
+            if child is None or id(child) in ancestors:
+                continue
+            full_child_name = ".".join(filter(None, (
+                module_name,
+                child_name,
+            )))
+            visit(child, full_child_name, ancestors | {id(child)})
+
+    visit(model, "", {id(model)})
     return occurrences
 
 

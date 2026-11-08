@@ -304,6 +304,48 @@ def test_dual_graph_selectors_use_original_parameter_names():
     ]
 
 
+def test_nested_dual_graph_selectors_use_original_parameter_names():
+    source = nn.Sequential(nn.Linear(2, 2))
+    model = nn.Module()
+    model.watched = trace(source)
+
+    selected = select_parameters(model)
+
+    assert [info.full_name for info in selected] == [
+        "watched.0.weight",
+        "watched.0.bias",
+    ]
+    assert selected[0].module_name == "watched.0"
+    assert selected[0].module is source[0]
+    assert _names(
+        model,
+        matches_full_name("watched.0.weight"),
+    ) == ["watched.0.weight"]
+    assert _names(
+        model,
+        matches_module_name("watched.0"),
+    ) == ["watched.0.weight", "watched.0.bias"]
+
+
+def test_nested_dual_graph_selectors_preserve_parent_aliases():
+    watched = trace(nn.Sequential(nn.Linear(2, 2, bias=False)))
+    model = nn.Module()
+    model.left = watched
+    model.right = watched
+
+    selected = select_parameters(
+        model,
+        matches_full_name("right.0.weight"),
+    )
+
+    assert len(selected) == 1
+    assert selected[0].full_name == "left.0.weight"
+    assert selected[0].aliases == (
+        "left.0.weight",
+        "right.0.weight",
+    )
+
+
 def test_interjected_selectors_use_original_names_modules_and_aliases():
     class Model(nn.Module):
         def __init__(self):
