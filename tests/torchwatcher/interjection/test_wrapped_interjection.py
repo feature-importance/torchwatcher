@@ -1301,6 +1301,32 @@ def test_dual_graph_load_hooks_run_once_in_the_original_namespace():
     assert post_hook_calls == [source[0]]
 
 
+def test_nested_source_load_hooks_see_public_diagnostics():
+    source = nn.Sequential(nn.Linear(2, 1))
+    pre_hook_prefixes = []
+    post_hook_diagnostics = []
+    source[0].register_load_state_dict_pre_hook(
+        lambda _module, _state, prefix, *_args: (
+            pre_hook_prefixes.append(prefix)
+        )
+    )
+    source[0].register_load_state_dict_post_hook(
+        lambda _module, incompatible: post_hook_diagnostics.append((
+            list(incompatible.missing_keys),
+            list(incompatible.unexpected_keys),
+        ))
+    )
+    container = nn.Module()
+    container.watched = trace(source)
+
+    incompatible = container.load_state_dict({}, strict=False)
+
+    expected_missing = ["watched.0.weight", "watched.0.bias"]
+    assert pre_hook_prefixes == ["watched.0."]
+    assert post_hook_diagnostics == [(expected_missing, [])]
+    assert incompatible.missing_keys == expected_missing
+
+
 def test_tracing_does_not_run_state_dict_hooks():
     source = nn.Sequential(nn.Linear(2, 1))
     calls = []
@@ -1365,6 +1391,36 @@ def test_state_dict_hook_added_keys_round_trip_through_load_hook():
     assert loaded == [7]
 
 
+def test_state_dict_hook_renamed_key_loads_mapped_graph_state():
+    source = nn.Sequential(nn.Linear(2, 1))
+
+    def save_hook(_module, state, prefix, _metadata):
+        state[f"{prefix}renamed_weight"] = state.pop(f"{prefix}weight")
+
+    def load_hook(_module, state, prefix, *_args):
+        renamed_key = f"{prefix}renamed_weight"
+        if renamed_key in state:
+            state[f"{prefix}weight"] = state.pop(renamed_key)
+
+    source[0].register_state_dict_post_hook(save_hook)
+    source[0].register_load_state_dict_pre_hook(load_hook)
+    container = nn.Module()
+    container.watched = trace(source)
+    checkpoint = container.state_dict()
+    checkpoint["watched.0.renamed_weight"] = torch.full((1, 2), 4.0)
+
+    container.load_state_dict(checkpoint, strict=True, assign=True)
+
+    train_weight = container.watched.train_module.get_parameter("0.weight")
+    eval_weight = container.watched.eval_module.get_parameter("0.weight")
+    assert train_weight is source[0].weight
+    assert eval_weight is source[0].weight
+    torch.testing.assert_close(
+        source[0].weight,
+        torch.full((1, 2), 4.0),
+    )
+
+
 def test_auxiliary_state_dict_hooks_run_once_in_public_namespace():
     interjection = _StatefulInterjection()
     calls = []
@@ -1387,6 +1443,36 @@ def test_auxiliary_state_dict_hooks_run_once_in_public_namespace():
     prefix = "_torchwatcher._StatefulInterjection0."
     assert calls == [("pre", prefix), ("post", prefix)]
     assert f"{prefix}marker" in checkpoint
+
+
+def test_auxiliary_hook_renamed_key_loads_once():
+    interjection = _StatefulInterjection()
+    load_prefixes = []
+
+    def save_hook(_module, state, prefix, _metadata):
+        state[f"{prefix}renamed_marker"] = state.pop(f"{prefix}marker")
+
+    def load_hook(_module, state, prefix, *_args):
+        load_prefixes.append(prefix)
+        renamed_key = f"{prefix}renamed_marker"
+        if renamed_key in state:
+            state[f"{prefix}marker"] = state.pop(renamed_key)
+
+    interjection.register_state_dict_post_hook(save_hook)
+    interjection.register_load_state_dict_pre_hook(load_hook)
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        interjection,
+    )
+    checkpoint = watched_model.state_dict()
+    prefix = "_torchwatcher._StatefulInterjection0."
+    checkpoint[f"{prefix}renamed_marker"] = torch.tensor(9.0)
+
+    watched_model.load_state_dict(checkpoint, strict=True)
+
+    assert load_prefixes == [prefix]
+    torch.testing.assert_close(interjection.marker, torch.tensor(9.0))
 
 
 def test_failed_dual_graph_load_restores_temporary_adapters():

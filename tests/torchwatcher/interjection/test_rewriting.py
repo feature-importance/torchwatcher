@@ -94,6 +94,73 @@ def test_parameterised_replacement_state_dict_hooks_run_once():
     assert calls == [("pre", "0."), ("post", "0.")]
 
 
+def test_parameterised_replacement_hook_renamed_key_loads_once():
+    load_prefixes = []
+
+    def create_replacement(original):
+        replacement = nn.Linear(
+            original.in_features,
+            original.out_features,
+        )
+
+        def save_hook(_module, state, prefix, _metadata):
+            state[f"{prefix}renamed_weight"] = state.pop(
+                f"{prefix}weight"
+            )
+
+        def load_hook(_module, state, prefix, *_args):
+            load_prefixes.append(prefix)
+            renamed_key = f"{prefix}renamed_weight"
+            if renamed_key in state:
+                state[f"{prefix}weight"] = state.pop(renamed_key)
+
+        replacement.register_state_dict_post_hook(save_hook)
+        replacement.register_load_state_dict_pre_hook(load_hook)
+        return replacement
+
+    replaced = replace(
+        nn.Sequential(nn.Linear(1, 1)),
+        matches_module_class(nn.Linear),
+        create_replacement,
+    )
+    checkpoint = replaced.state_dict()
+
+    replaced.load_state_dict(checkpoint, strict=True)
+
+    assert load_prefixes == ["0."]
+
+
+def test_parameterised_replacement_post_hook_sees_public_diagnostics():
+    diagnostics = []
+
+    def create_replacement(original):
+        replacement = nn.Linear(
+            original.in_features,
+            original.out_features,
+        )
+        def post_hook(_module, incompatible):
+            diagnostics.append((
+                list(incompatible.missing_keys),
+                list(incompatible.unexpected_keys),
+            ))
+            incompatible.missing_keys.remove("0.weight")
+
+        replacement.register_load_state_dict_post_hook(post_hook)
+        return replacement
+
+    replaced = replace(
+        nn.Sequential(nn.Linear(1, 1)),
+        matches_module_class(nn.Linear),
+        create_replacement,
+    )
+
+    incompatible = replaced.load_state_dict({}, strict=False)
+
+    expected_missing = ["0.weight", "0.bias"]
+    assert diagnostics == [(expected_missing, [])]
+    assert incompatible.missing_keys == ["0.bias"]
+
+
 def test_replace_restores_source_mode_after_failure():
     model = _RaisesInEval()
     model.train()

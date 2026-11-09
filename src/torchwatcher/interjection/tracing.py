@@ -245,6 +245,8 @@ def _begin_dual_graph_load_transaction(module, context):
             )
         }
     )
+    preprocessed_modules = context.get("preprocessed_modules", set())
+    deferred_post_modules = context.get("deferred_post_modules", set())
 
     graph_modules = []
     versioned_modules = set()
@@ -338,8 +340,12 @@ def _begin_dual_graph_load_transaction(module, context):
         for key, hook in original_pre.items():
             adapted_pre[key] = guarded(
                 hook,
-                lambda hook=hook, hook_state=hook_state: (
-                    _is_dual_graph_load_hook(hook) or hook_state["pre"]
+                lambda hook=hook, hook_state=hook_state, child=child: (
+                    _is_dual_graph_load_hook(hook)
+                    or (
+                        hook_state["pre"]
+                        and id(child) not in preprocessed_modules
+                    )
                 ),
             )
 
@@ -348,8 +354,12 @@ def _begin_dual_graph_load_transaction(module, context):
         for key, hook in original_post.items():
             adapted_post[key] = guarded(
                 hook,
-                lambda hook=hook, hook_state=hook_state: (
-                    _is_dual_graph_load_hook(hook) or hook_state["post"]
+                lambda hook=hook, hook_state=hook_state, child=child: (
+                    _is_dual_graph_load_hook(hook)
+                    or (
+                        hook_state["post"]
+                        and id(child) not in deferred_post_modules
+                    )
                 ),
             )
 
@@ -496,6 +506,182 @@ def _run_graph_state_dict_post_hooks(
     return destination
 
 
+def _preprocess_graph_owned_load_hooks(
+        module,
+        state_dict,
+        prefix,
+        metadata,
+        strict,
+        assign,
+        missing_keys,
+        unexpected_keys,
+        error_messages,
+):
+    """Run graph-only load pre-hooks once in their public namespace."""
+    preprocessed_modules = set()
+    logical_root = prefix[:-1]
+    for checkpoint_name, child in _graph_owned_module_occurrences(module):
+        hooks = [
+            hook for hook in child._load_state_dict_pre_hooks.values()
+            if not _is_dual_graph_load_hook(hook)
+        ]
+        if not hooks:
+            continue
+
+        module_prefix = f"{prefix}{checkpoint_name}."
+        local_state = OrderedDict(
+            (key, value)
+            for key, value in state_dict.items()
+            if key.startswith(module_prefix)
+        )
+        metadata_name = ".".join(filter(None, (
+            logical_root,
+            checkpoint_name,
+        )))
+        local_metadata = dict(
+            {} if metadata is None else metadata.get(metadata_name, {})
+        )
+        if assign:
+            local_metadata["assign_to_params_buffers"] = True
+        for hook in hooks:
+            hook(
+                local_state,
+                module_prefix,
+                local_metadata,
+                strict,
+                missing_keys,
+                unexpected_keys,
+                error_messages,
+            )
+
+        for key in tuple(state_dict):
+            if key.startswith(module_prefix):
+                del state_dict[key]
+        state_dict.update(local_state)
+        preprocessed_modules.add(id(child))
+
+    return preprocessed_modules
+
+
+def _source_module_occurrences(source_module):
+    return list(source_module.named_modules(remove_duplicate=False))
+
+
+def _preprocess_source_load_hooks(
+        occurrences,
+        source_state,
+        prefix,
+        metadata,
+        strict,
+        assign,
+        missing_keys,
+        unexpected_keys,
+        error_messages,
+):
+    """Run source load pre-hooks with the watched model's public prefix."""
+    public_state = OrderedDict(
+        (f"{prefix}{key}", value)
+        for key, value in source_state.items()
+    )
+    logical_root = prefix[:-1]
+    for module_name, child in occurrences:
+        hooks = [
+            hook for hook in child._load_state_dict_pre_hooks.values()
+            if not _is_dual_graph_load_hook(hook)
+        ]
+        if not hooks:
+            continue
+
+        module_prefix = f"{prefix}{module_name}." if module_name else prefix
+        local_state = OrderedDict(
+            (key, value)
+            for key, value in public_state.items()
+            if key.startswith(module_prefix)
+        )
+        metadata_name = ".".join(filter(None, (
+            logical_root,
+            module_name,
+        )))
+        local_metadata = dict(
+            {} if metadata is None else metadata.get(metadata_name, {})
+        )
+        if assign:
+            local_metadata["assign_to_params_buffers"] = True
+        for hook in hooks:
+            hook(
+                local_state,
+                module_prefix,
+                local_metadata,
+                strict,
+                missing_keys,
+                unexpected_keys,
+                error_messages,
+            )
+
+        for key in tuple(public_state):
+            if key.startswith(module_prefix):
+                del public_state[key]
+        public_state.update(local_state)
+
+    source_state.clear()
+    source_state.update(
+        (key[len(prefix):], value)
+        for key, value in public_state.items()
+        if key.startswith(prefix)
+    )
+
+
+def _suppress_source_load_hooks(occurrences):
+    """Temporarily retain only TorchWatcher-internal source load hooks."""
+    states = []
+    seen = set()
+    for _module_name, child in occurrences:
+        if id(child) in seen:
+            continue
+        seen.add(id(child))
+        original_pre = child._load_state_dict_pre_hooks
+        original_post = child._load_state_dict_post_hooks
+        adapted_pre = OrderedDict(
+            (key, hook) for key, hook in original_pre.items()
+            if _is_dual_graph_load_hook(hook)
+        )
+        adapted_post = OrderedDict(
+            (key, hook) for key, hook in original_post.items()
+            if _is_dual_graph_load_hook(hook)
+        )
+        child._load_state_dict_pre_hooks = adapted_pre
+        child._load_state_dict_post_hooks = adapted_post
+        states.append((
+            child,
+            original_pre,
+            original_post,
+            adapted_pre,
+            adapted_post,
+        ))
+
+    def restore():
+        for child, original_pre, original_post, adapted_pre, adapted_post in (
+                states):
+            if child._load_state_dict_pre_hooks is adapted_pre:
+                child._load_state_dict_pre_hooks = original_pre
+            if child._load_state_dict_post_hooks is adapted_post:
+                child._load_state_dict_post_hooks = original_post
+
+    return restore
+
+
+def _deferred_load_post_hooks(occurrences):
+    deferred = []
+    for _module_name, child in occurrences:
+        hooks = tuple(
+            hook for hook in child._load_state_dict_post_hooks.values()
+            if not _is_dual_graph_load_hook(hook)
+        )
+        if hooks:
+            deferred.append((child, hooks))
+    return deferred
+
+
 def _dual_graph_load_state_dict_pre_hook(
         module,
         state_dict,
@@ -547,6 +733,18 @@ def _dual_graph_load_state_dict_pre_hook(
                         internal_name,
                         metadata[supplied_names[-1]],
                     )
+
+    preprocessed_modules = _preprocess_graph_owned_load_hooks(
+        module,
+        state_dict,
+        prefix,
+        metadata,
+        _strict,
+        bool(_local_metadata.get("assign_to_params_buffers", False)),
+        missing_keys,
+        _unexpected_keys,
+        error_messages,
+    )
 
     for graph_name in ("train_module", "eval_module"):
         graph_module = getattr(module, graph_name)
@@ -615,18 +813,18 @@ def _dual_graph_load_state_dict_pre_hook(
                 # Preserve the analyser's current initialisation.
                 state_dict[graph_key] = value
 
+    deferred_source_post_hooks = []
     source_module = module.__dict__["_torchwatcher_source_module"][0]
     if source_module is not None:
-        source_state = _registered_state(source_module, keep_vars=True)
+        source_template = _registered_state(source_module, keep_vars=True)
+        source_state = OrderedDict()
+        source_state._metadata = copy.deepcopy(
+            getattr(source_template, "_metadata", OrderedDict())
+        )
         source_state_objects = _state_objects(source_module)
         for source_name in module._source_state_names:
             source_key = f"{prefix}{source_name}"
             if source_key not in state_dict:
-                if (
-                        source_name in module._source_only_state_names
-                        and source_key not in missing_keys
-                ):
-                    missing_keys.append(source_key)
                 continue
 
             supplied_value = state_dict[source_key]
@@ -643,9 +841,10 @@ def _dual_graph_load_state_dict_pre_hook(
                         f"size mismatch for {source_key}: copying a param "
                         f"with shape {supplied_value.shape} from checkpoint, "
                         "the shape in current model is "
-                        f"{source_state[source_name].shape}."
+                        f"{source_template[source_name].shape}."
                     )
                     reported_shape_mismatches.add(source_key)
+                source_state[source_name] = source_template[source_name]
             else:
                 source_state[source_name] = supplied_value
             translated_keys.add(source_key)
@@ -662,7 +861,7 @@ def _dual_graph_load_state_dict_pre_hook(
             if (
                     full_key in translated_keys
                     or supplied_key.startswith(_TORCHWATCHER_STATE_PREFIX)
-                    or supplied_key in source_state
+                    or supplied_key in source_template
             ):
                 continue
             source_state[supplied_key] = state_dict[full_key]
@@ -679,23 +878,88 @@ def _dual_graph_load_state_dict_pre_hook(
                 if logical_name in metadata:
                     source_metadata[source_name] = metadata[logical_name]
         assign = bool(_local_metadata.get("assign_to_params_buffers", False))
+        source_occurrences = _source_module_occurrences(source_module)
+        deferred_source_post_hooks = _deferred_load_post_hooks(
+            source_occurrences
+        )
+        _preprocess_source_load_hooks(
+            source_occurrences,
+            source_state,
+            prefix,
+            metadata,
+            _strict,
+            assign,
+            missing_keys,
+            _unexpected_keys,
+            error_messages,
+        )
+        restore_source_hooks = _suppress_source_load_hooks(
+            source_occurrences
+        )
         try:
-            source_incompatible = source_module.load_state_dict(
-                source_state,
-                strict=False,
-                assign=assign,
-            )
+            try:
+                source_incompatible = source_module.load_state_dict(
+                    source_state,
+                    strict=False,
+                    assign=assign,
+                )
+            finally:
+                restore_source_hooks()
         except RuntimeError as error:
             error_messages.append(str(error))
         else:
+            source_missing_names = source_incompatible.missing_keys
             unexpected = set(source_incompatible.unexpected_keys)
             translated_keys.update(
                 full_key
                 for source_name, full_key in hook_candidates.items()
                 if source_name not in unexpected
             )
+            for source_name in source_missing_names:
+                source_key = f"{prefix}{source_name}"
+                if (
+                        source_key not in missing_keys
+                ):
+                    missing_keys.append(source_key)
 
-    context = {"prefix": prefix, "cleanup": None}
+            # Source hooks may rename expected keys before loading them. Seed
+            # mapped graph registrations from the resulting source state so
+            # internal traversal observes exactly what those hooks accepted.
+            loaded_source_state = _registered_state(
+                source_module,
+                keep_vars=True,
+            )
+            for (graph_name, state_name), source_names in (
+                    module._graph_state_to_source.items()):
+                graph_key = f"{prefix}{graph_name}.{state_name}"
+                loaded_names = [
+                    source_name
+                    for source_name in source_names
+                    if source_name in loaded_source_state
+                ]
+                if loaded_names:
+                    state_dict[graph_key] = loaded_source_state[
+                        loaded_names[-1]
+                    ]
+                else:
+                    state_dict.pop(graph_key, None)
+
+    graph_owned_occurrences = _graph_owned_module_occurrences(module)
+    deferred_graph_post_hooks = _deferred_load_post_hooks(
+        graph_owned_occurrences
+    )
+    context = {
+        "prefix": prefix,
+        "cleanup": None,
+        "preprocessed_modules": preprocessed_modules,
+        "deferred_post_modules": {
+            id(child)
+            for child, _hooks in deferred_graph_post_hooks
+        },
+        "deferred_post_hooks": (
+            deferred_source_post_hooks + deferred_graph_post_hooks
+        ),
+    }
     module.__dict__.setdefault(
         "_torchwatcher_load_state_dict_contexts",
         [],
@@ -752,6 +1016,16 @@ def _dual_graph_load_state_dict_post_hook(module, incompatible_keys):
     incompatible_keys.unexpected_keys[:] = translate(
         incompatible_keys.unexpected_keys
     )
+
+    for child, hooks in reversed(context["deferred_post_hooks"]):
+        for hook in hooks:
+            result = hook(child, incompatible_keys)
+            if result is not None:
+                raise AssertionError(
+                    "Hooks registered with "
+                    "register_load_state_dict_post_hook are not expected "
+                    "to return new values; modify incompatible_keys in place"
+                )
 
 
 def _build_dual_graph_state_mapping(
