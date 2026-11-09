@@ -76,6 +76,27 @@ class _VersionedLinear(nn.Linear):
         )
 
 
+class _FailingVersionedLinear(_VersionedLinear):
+    def __init__(self, in_features, out_features):
+        super().__init__(in_features, out_features)
+        self.fail_loading = True
+
+    def _load_from_state_dict(
+            self, state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs):
+        if self.fail_loading:
+            raise RuntimeError("deliberate load failure")
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
+
 class _ExtraStateBlock(nn.Module):
     def __init__(self, value=0):
         super().__init__()
@@ -996,6 +1017,82 @@ def test_dual_graph_buffers_remain_deduplicated_after_dtype_conversion():
     assert [name for name, _ in watched_model.named_buffers()] == ["scale"]
 
 
+def test_source_only_state_participates_in_dual_graph_lifecycle():
+    source = _PartiallyUnusedStateModel()
+    watched_model = trace(source)
+
+    assert [name for name, _ in watched_model.named_parameters()] == [
+        "root_parameter",
+        "used.weight",
+        "used.bias",
+        "unused.weight",
+        "unused.bias",
+    ]
+    assert [name for name, _ in watched_model.named_buffers()] == [
+        "root_buffer",
+    ]
+    assert all(
+        actual is expected
+        for actual, expected in zip(
+            watched_model.parameters(),
+            source.parameters(),
+            strict=True,
+        )
+    )
+
+    watched_model.double()
+
+    assert all(
+        parameter.dtype == torch.float64
+        for parameter in watched_model.parameters()
+    )
+    assert all(
+        buffer.dtype == torch.float64
+        for buffer in watched_model.buffers()
+    )
+    assert all(
+        value.dtype == torch.float64
+        for value in source.state_dict().values()
+        if torch.is_tensor(value)
+    )
+
+
+def test_source_only_parameter_aliases_survive_dtype_conversion():
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.first = nn.Parameter(torch.ones(1))
+            self.second = self.first
+
+        def forward(self, inputs):
+            return inputs
+
+    watched_model = trace(Model()).double()
+    parameters = dict(watched_model.named_parameters(
+        remove_duplicate=False,
+    ))
+
+    assert list(parameters) == ["first", "second"]
+    assert parameters["first"] is parameters["second"]
+    assert parameters["first"].dtype == torch.float64
+
+
+def test_dual_graph_apply_visits_source_only_modules_once():
+    source = _PartiallyUnusedStateModel()
+    watched_model = trace(source)
+    visited = []
+
+    watched_model.apply(
+        lambda module: visited.append(module)
+        if isinstance(module, nn.Linear)
+        else None
+    )
+
+    assert visited.count(source.used) == 1
+    assert visited.count(source.unused) == 1
+    assert len(visited) == 2
+
+
 def test_dual_graph_checkpoint_uses_logical_names_and_loads_strictly():
     source = _ModeStateModel()
     source.train_layer.weight.data.fill_(2.0)
@@ -1182,6 +1279,50 @@ def test_interjected_checkpoint_translates_module_version_metadata():
     restored = nn.Sequential(_VersionedLinear(2, 1))
     restored.load_state_dict(watched_model.state_dict(), strict=True)
     assert restored[0].loaded_versions == [_VersionedLinear._version]
+
+
+def test_dual_graph_load_hooks_run_once_in_the_original_namespace():
+    source = nn.Sequential(nn.Linear(2, 1))
+    pre_hook_prefixes = []
+    post_hook_calls = []
+    source[0].register_load_state_dict_pre_hook(
+        lambda _module, _state, prefix, *_args: (
+            pre_hook_prefixes.append(prefix)
+        )
+    )
+    source[0].register_load_state_dict_post_hook(
+        lambda module, _incompatible: post_hook_calls.append(module)
+    )
+    watched_model = trace(source)
+
+    watched_model.load_state_dict(watched_model.state_dict(), strict=True)
+
+    assert pre_hook_prefixes == ["0."]
+    assert post_hook_calls == [source[0]]
+
+
+def test_failed_dual_graph_load_restores_temporary_adapters():
+    source = nn.Sequential(_FailingVersionedLinear(2, 1))
+    watched_model = trace(source)
+    original_pre_hooks = source[0]._load_state_dict_pre_hooks
+    original_post_hooks = source[0]._load_state_dict_post_hooks
+
+    with pytest.raises(RuntimeError, match="deliberate load failure"):
+        watched_model.load_state_dict(
+            watched_model.state_dict(),
+            strict=True,
+        )
+
+    assert source[0]._load_state_dict_pre_hooks is original_pre_hooks
+    assert source[0]._load_state_dict_post_hooks is original_post_hooks
+    assert "_torchwatcher_version_load_patch" not in source[0].__dict__
+    assert (
+        "_torchwatcher_load_state_dict_contexts"
+        not in watched_model.__dict__
+    )
+
+    source[0].fail_loading = False
+    watched_model.load_state_dict(watched_model.state_dict(), strict=True)
 
 
 def test_nested_dual_graph_load_supplies_current_descendant_versions():

@@ -73,7 +73,9 @@ def estimate_rank(features: torch.Tensor,
         else:
             f = features
 
-        cov = torch.cov(f.T)
+        # torch.cov returns a scalar for a single feature, whereas
+        # matrix_rank consistently expects a matrix.
+        cov = torch.atleast_2d(torch.cov(f.T))
         return torch.linalg.matrix_rank(cov, hermitian=True,
                                         rtol=threshold).cpu().item()
     elif mode == 'aaT':

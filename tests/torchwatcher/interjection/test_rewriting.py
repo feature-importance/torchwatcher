@@ -57,6 +57,10 @@ def test_parameterised_replacement_is_shared_between_train_and_eval():
         replaced(torch.ones(1, 1)),
         torch.tensor([[0.9]]),
     )
+    torch.testing.assert_close(
+        replaced.state_dict()["0.weight"],
+        torch.tensor([[0.9]]),
+    )
 
 
 def test_replace_restores_source_mode_after_failure():

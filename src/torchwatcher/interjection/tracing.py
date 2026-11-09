@@ -1,6 +1,7 @@
 import copy
 import importlib
 import inspect
+from collections import OrderedDict
 from contextvars import ContextVar
 from types import MethodType
 from typing import Type, Optional, Dict, Any, Union, Callable
@@ -109,22 +110,33 @@ def _load_from_state_dict_with_current_version(
         unexpected_keys,
         error_messages,
 ):
-    """Supply metadata before a custom ``_load_from_state_dict`` runs."""
-    local_metadata.setdefault("version", module._version)
+    """Guard an internal load and supply absent version metadata if needed."""
     patch_state = module.__dict__["_torchwatcher_version_load_patch"]
-    return patch_state["original"](
-        state_dict,
-        prefix,
-        local_metadata,
-        strict,
-        missing_keys,
-        unexpected_keys,
-        error_messages,
-    )
+    if patch_state["version_users"]:
+        local_metadata.setdefault("version", module._version)
+    try:
+        return patch_state["original"](
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_messages,
+        )
+    except BaseException:
+        for cleanup in tuple(reversed(patch_state["cleanups"])):
+            cleanup()
+        raise
 
 
-def _patch_current_module_version(module):
-    """Temporarily wrap loading where nested metadata is unavailable."""
+def _patch_current_module_version(
+        module,
+        cleanup,
+        *,
+        supply_version,
+):
+    """Guard an internal load, optionally supplying current version metadata."""
     patch_state = module.__dict__.get("_torchwatcher_version_load_patch")
     if patch_state is None:
         patch_state = {
@@ -136,6 +148,8 @@ def _patch_current_module_version(module):
                 "_load_from_state_dict"
             ),
             "users": 0,
+            "version_users": 0,
+            "cleanups": [],
         }
         module.__dict__["_torchwatcher_version_load_patch"] = patch_state
         object.__setattr__(
@@ -144,11 +158,22 @@ def _patch_current_module_version(module):
             MethodType(_load_from_state_dict_with_current_version, module),
         )
     patch_state["users"] += 1
+    patch_state["version_users"] += int(supply_version)
+    if cleanup not in patch_state["cleanups"]:
+        patch_state["cleanups"].append(cleanup)
 
 
-def _unpatch_current_module_version(module):
+def _unpatch_current_module_version(
+        module,
+        cleanup,
+        *,
+        supply_version,
+):
     patch_state = module.__dict__["_torchwatcher_version_load_patch"]
     patch_state["users"] -= 1
+    patch_state["version_users"] -= int(supply_version)
+    if cleanup in patch_state["cleanups"]:
+        patch_state["cleanups"].remove(cleanup)
     if patch_state["users"]:
         return
     if patch_state["had_instance_attribute"]:
@@ -160,6 +185,160 @@ def _unpatch_current_module_version(module):
     else:
         object.__delattr__(module, "_load_from_state_dict")
     del module.__dict__["_torchwatcher_version_load_patch"]
+
+
+def _is_dual_graph_load_hook(hook):
+    hook = getattr(hook, "hook", hook)
+    return hook in {
+        _dual_graph_load_state_dict_pre_hook,
+        _dual_graph_load_state_dict_post_hook,
+    }
+
+
+def _begin_dual_graph_load_transaction(module, context):
+    """Deduplicate public hooks during internal mode-graph traversal."""
+    source_module = module.__dict__["_torchwatcher_source_module"][0]
+    mapped_modules = {
+        id(getattr(module, graph_name).get_submodule(module_name))
+        for graph_name, module_name in module._graph_module_to_source
+    }
+    source_modules = (
+        set()
+        if source_module is None
+        else {
+            id(child)
+            for _name, child in source_module.named_modules(
+                remove_duplicate=False
+            )
+        }
+    )
+
+    graph_modules = []
+    versioned_modules = set()
+    seen_modules = set()
+    for graph_name in ("train_module", "eval_module"):
+        graph_module = getattr(module, graph_name)
+        for module_name, child in graph_module.named_modules(
+                remove_duplicate=False):
+            child_id = id(child)
+            if child_id not in seen_modules:
+                seen_modules.add(child_id)
+                graph_modules.append(child)
+            if (graph_name, module_name) in module._graph_module_to_source:
+                versioned_modules.add(child_id)
+
+    hook_states = []
+    patched_modules = []
+    active = True
+
+    def cleanup(remove_context=True):
+        nonlocal active
+        if not active:
+            return
+        active = False
+        for child, original_pre, original_post, adapted_pre, adapted_post in (
+                hook_states):
+            if child._load_state_dict_pre_hooks is adapted_pre:
+                child._load_state_dict_pre_hooks = original_pre
+            if child._load_state_dict_post_hooks is adapted_post:
+                child._load_state_dict_post_hooks = original_post
+        for child, supply_version in reversed(patched_modules):
+            if "_torchwatcher_version_load_patch" in child.__dict__:
+                _unpatch_current_module_version(
+                    child,
+                    cleanup,
+                    supply_version=supply_version,
+                )
+        if remove_context:
+            contexts = module.__dict__.get(
+                "_torchwatcher_load_state_dict_contexts",
+                [],
+            )
+            if context in contexts:
+                contexts.remove(context)
+            if not contexts:
+                module.__dict__.pop(
+                    "_torchwatcher_load_state_dict_contexts",
+                    None,
+                )
+
+    def guarded(hook, should_run):
+        def run(*args, **kwargs):
+            if not should_run():
+                return None
+            try:
+                return hook(*args, **kwargs)
+            except BaseException:
+                cleanup()
+                raise
+        return run
+
+    for child in graph_modules:
+        original_pre = child._load_state_dict_pre_hooks
+        original_post = child._load_state_dict_post_hooks
+        remaining = 0 if (
+            id(child) in source_modules or id(child) in mapped_modules
+        ) else 1
+        hook_state = {
+            "remaining": remaining,
+            "pre": False,
+            "post": False,
+            "decisions": [],
+        }
+
+        def begin_pre(*_args, hook_state=hook_state):
+            run = hook_state["remaining"] > 0
+            if run:
+                hook_state["remaining"] -= 1
+            hook_state["pre"] = run
+            hook_state["decisions"].append(run)
+
+        def begin_post(*_args, hook_state=hook_state):
+            hook_state["post"] = (
+                hook_state["decisions"].pop(0)
+                if hook_state["decisions"]
+                else False
+            )
+
+        adapted_pre = OrderedDict()
+        adapted_pre[("torchwatcher", id(context))] = begin_pre
+        for key, hook in original_pre.items():
+            adapted_pre[key] = guarded(
+                hook,
+                lambda hook=hook, hook_state=hook_state: (
+                    _is_dual_graph_load_hook(hook) or hook_state["pre"]
+                ),
+            )
+
+        adapted_post = OrderedDict()
+        adapted_post[("torchwatcher", id(context))] = begin_post
+        for key, hook in original_post.items():
+            adapted_post[key] = guarded(
+                hook,
+                lambda hook=hook, hook_state=hook_state: (
+                    _is_dual_graph_load_hook(hook) or hook_state["post"]
+                ),
+            )
+
+        child._load_state_dict_pre_hooks = adapted_pre
+        child._load_state_dict_post_hooks = adapted_post
+        hook_states.append((
+            child,
+            original_pre,
+            original_post,
+            adapted_pre,
+            adapted_post,
+        ))
+
+        supply_version = id(child) in versioned_modules
+        _patch_current_module_version(
+            child,
+            cleanup,
+            supply_version=supply_version,
+        )
+        patched_modules.append((child, supply_version))
+
+    context["cleanup"] = cleanup
 
 
 def _dual_graph_state_dict_hook(
@@ -261,23 +440,6 @@ def _dual_graph_load_state_dict_pre_hook(
         error_messages,
 ):
     """Expand logical checkpoint keys for each mode graph that owns them."""
-    module.__dict__.setdefault(
-        "_torchwatcher_load_state_dict_prefixes",
-        [],
-    ).append(prefix)
-    version_patched_modules = []
-    seen_versioned_modules = set()
-    for (graph_name, module_name) in module._graph_module_to_source:
-        graph_child = getattr(module, graph_name).get_submodule(module_name)
-        if id(graph_child) in seen_versioned_modules:
-            continue
-        seen_versioned_modules.add(id(graph_child))
-        _patch_current_module_version(graph_child)
-        version_patched_modules.append(graph_child)
-    module.__dict__.setdefault(
-        "_torchwatcher_version_patched_modules",
-        [],
-    ).append(version_patched_modules)
     translated_keys = set()
     reported_shape_mismatches = set()
     relative_keys = {
@@ -440,24 +602,25 @@ def _dual_graph_load_state_dict_pre_hook(
         except RuntimeError as error:
             error_messages.append(str(error))
 
+    context = {"prefix": prefix, "cleanup": None}
+    module.__dict__.setdefault(
+        "_torchwatcher_load_state_dict_contexts",
+        [],
+    ).append(context)
+    _begin_dual_graph_load_transaction(module, context)
+
     for key in translated_keys:
         del state_dict[key]
 
 
 def _dual_graph_load_state_dict_post_hook(module, incompatible_keys):
     """Expose load diagnostics in the public checkpoint namespace."""
-    version_patch_stacks = module.__dict__[
-        "_torchwatcher_version_patched_modules"
-    ]
-    for patched_module in version_patch_stacks.pop():
-        _unpatch_current_module_version(patched_module)
-    if not version_patch_stacks:
-        del module.__dict__["_torchwatcher_version_patched_modules"]
-
-    prefixes = module.__dict__["_torchwatcher_load_state_dict_prefixes"]
-    prefix = prefixes.pop()
-    if not prefixes:
-        del module.__dict__["_torchwatcher_load_state_dict_prefixes"]
+    contexts = module.__dict__["_torchwatcher_load_state_dict_contexts"]
+    context = contexts.pop()
+    context["cleanup"](remove_context=False)
+    prefix = context["prefix"]
+    if not contexts:
+        del module.__dict__["_torchwatcher_load_state_dict_contexts"]
 
     translations = {}
     for graph_name in ("train_module", "eval_module"):
@@ -588,6 +751,21 @@ def _build_dual_graph_state_mapping(
         for source_names in graph_to_source.values()
         for source_name in source_names
     }
+    # A parameterised replacement can deliberately retain an original public
+    # name while owning a different tensor. In that case the graph value is
+    # authoritative and the obsolete source value is not source-only state.
+    mapped_source_names.update(
+        state_name
+        for graph_name, graph_module in (
+            ("train_module", train_module),
+            ("eval_module", eval_module),
+        )
+        for state_name in graph_module.state_dict()
+        if (
+                (graph_name, state_name) not in graph_to_source
+                and state_name in source_state_names
+        )
+    )
     return (
         source_state_names,
         tuple(
@@ -702,40 +880,21 @@ class DualGraphModule(nn.Module):
     def _logical_registrations(self, kind):
         """Yield logical names, owners and values for one registration type."""
         source_module = self.__dict__["_torchwatcher_source_module"][0]
-        graph_values = {
-            id(value)
-            for graph_module in (self.train_module, self.eval_module)
-            for _name, value in getattr(
-                graph_module,
-                f"named_{kind}s",
-            )(remove_duplicate=False)
-        }
-        emitted_names = set()
-        source_value_ids = set()
-        if source_module is not None:
-            registration_name = f"_{kind}s"
-            for module_name, owner in source_module.named_modules(
-                    remove_duplicate=False):
-                for local_name, value in getattr(owner, registration_name).items():
-                    if value is None or id(value) not in graph_values:
-                        continue
-                    full_name = ".".join(filter(None, (
-                        module_name,
-                        local_name,
-                    )))
-                    emitted_names.add(full_name)
-                    source_value_ids.add(id(value))
-                    yield full_name, owner, local_name, value
-
+        registration_name = f"_{kind}s"
+        graph_registrations = []
+        graph_names = set()
+        graph_value_ids = set()
         for graph_name, graph_module in (
                 ("train_module", self.train_module),
                 ("eval_module", self.eval_module),
         ):
-            registration_name = f"_{kind}s"
             for module_name, owner in graph_module.named_modules(
                     remove_duplicate=False):
-                for local_name, value in getattr(owner, registration_name).items():
-                    if value is None or id(value) in source_value_ids:
+                for local_name, value in getattr(
+                        owner,
+                        registration_name,
+                ).items():
+                    if value is None:
                         continue
                     state_name = ".".join(filter(None, (
                         module_name,
@@ -743,17 +902,149 @@ class DualGraphModule(nn.Module):
                     )))
                     for full_name in _dual_graph_checkpoint_names(
                             self, graph_name, state_name):
-                        if full_name in emitted_names:
-                            continue
-                        emitted_names.add(full_name)
-                        yield full_name, owner, local_name, value
+                        graph_names.add(full_name)
+                        graph_value_ids.add(id(value))
+                        graph_registrations.append((
+                            full_name,
+                            owner,
+                            local_name,
+                            value,
+                        ))
+
+        emitted_names = set()
+        source_value_ids = set()
+        if source_module is not None:
+            for module_name, owner in source_module.named_modules(
+                    remove_duplicate=False):
+                for local_name, value in getattr(owner, registration_name).items():
+                    if value is None:
+                        continue
+                    full_name = ".".join(filter(None, (
+                        module_name,
+                        local_name,
+                    )))
+                    if (
+                            full_name in graph_names
+                            and id(value) not in graph_value_ids
+                    ):
+                        continue
+                    emitted_names.add(full_name)
+                    source_value_ids.add(id(value))
+                    yield full_name, owner, local_name, value
+
+        for full_name, owner, local_name, value in graph_registrations:
+            if (
+                    id(value) in source_value_ids
+                    or full_name in emitted_names
+            ):
+                continue
+            emitted_names.add(full_name)
+            yield full_name, owner, local_name, value
 
     def logical_parameter_registrations(self):
         """Yield parameter registrations in the original model namespace."""
         yield from self._logical_registrations("parameter")
 
+    def _apply(self, fn, recurse=True):
+        """Apply a tensor conversion to graph and retained source state.
+
+        FX omits registrations which are not used by either forward graph.
+        Those registrations remain part of the public module lifecycle, so
+        convert them separately and keep every original/graph alias tied to
+        the same converted object.
+        """
+        if not recurse:
+            return super()._apply(fn, recurse=False)
+
+        source_module = self.__dict__["_torchwatcher_source_module"][0]
+
+        def registration_groups(kind):
+            registration_name = f"_{kind}s"
+            groups = {}
+
+            def add(root, location):
+                if root is None:
+                    return
+                seen_slots = set()
+                for _module_name, owner in root.named_modules(
+                        remove_duplicate=False):
+                    registrations = getattr(owner, registration_name)
+                    for local_name, value in registrations.items():
+                        if value is None:
+                            continue
+                        slot = (id(owner), local_name)
+                        if slot in seen_slots:
+                            continue
+                        seen_slots.add(slot)
+                        group = groups.setdefault(id(value), {
+                            "value": value,
+                            "source": [],
+                            "graph": [],
+                        })
+                        group[location].append((owner, local_name))
+
+            add(source_module, "source")
+            add(self.train_module, "graph")
+            add(self.eval_module, "graph")
+            return groups
+
+        parameter_groups = registration_groups("parameter")
+        buffer_groups = registration_groups("buffer")
+
+        super()._apply(fn, recurse=True)
+
+        # Graph conversion can replace buffers (and, depending on PyTorch's
+        # future flags, parameters). Reconnect source and graph aliases to one
+        # canonical converted registration.
+        for kind, groups in (
+                ("parameter", parameter_groups),
+                ("buffer", buffer_groups),
+        ):
+            registrations_name = f"_{kind}s"
+            for group in groups.values():
+                if not group["graph"]:
+                    continue
+                owner, local_name = group["graph"][0]
+                converted = getattr(owner, registrations_name)[local_name]
+                for alias_owner, alias_name in (
+                        group["source"] + group["graph"]):
+                    getattr(alias_owner, registrations_name)[alias_name] = (
+                        converted
+                    )
+
+        # Let nn.Module implement the exact parameter, gradient and buffer
+        # conversion semantics for values which FX omitted entirely.
+        source_only = nn.Module()
+        parameter_keys = {}
+        buffer_keys = {}
+        for index, group in enumerate(parameter_groups.values()):
+            if group["graph"]:
+                continue
+            key = f"parameter_{index}"
+            source_only._parameters[key] = group["value"]
+            parameter_keys[key] = group
+        for index, group in enumerate(buffer_groups.values()):
+            if group["graph"]:
+                continue
+            key = f"buffer_{index}"
+            source_only._buffers[key] = group["value"]
+            buffer_keys[key] = group
+
+        nn.Module._apply(source_only, fn, recurse=False)
+
+        for key, group in parameter_keys.items():
+            converted = source_only._parameters[key]
+            for owner, local_name in group["source"]:
+                owner._parameters[local_name] = converted
+        for key, group in buffer_keys.items():
+            converted = source_only._buffers[key]
+            for owner, local_name in group["source"]:
+                owner._buffers[local_name] = converted
+
+        return self
+
     def apply(self, fn: Callable[[nn.Module], None]):
-        """Apply ``fn`` once to each logical module in both mode graphs.
+        """Apply ``fn`` once to each logical or source-only module.
 
         Train and eval graphs contain distinct module objects whose parameters
         and buffers can represent the same original module. Traversing both
@@ -764,7 +1055,17 @@ class DualGraphModule(nn.Module):
         seen_names = set()
         seen_modules = set()
         seen_registrations = set()
-        for graph_module in (self.train_module, self.eval_module):
+        source_module = self.__dict__["_torchwatcher_source_module"][0]
+        roots = tuple(
+            root
+            for root in (
+                self.train_module,
+                self.eval_module,
+                source_module,
+            )
+            if root is not None
+        )
+        for graph_module in roots:
             for name, module in graph_module.named_modules():
                 registration = (
                     id(module._parameters),

@@ -8,6 +8,7 @@ from torchwatcher.analysis import (
     LayerWeightRankAnalyser,
     PerChannelWeightRankAnalyser,
     RankAnalyser,
+    estimate_rank,
 )
 from torchwatcher.interjection import interject_by_module_class, interject_by_name
 
@@ -172,6 +173,13 @@ def test_rank_analyser_supports_low_precision_activations(mode, dtype):
     watched_model(features)
 
     assert analyser.to_dict()["0"]["features_rank"] == 2
+
+
+@pytest.mark.parametrize("mode", ["aTa", "aaT", "a"])
+def test_estimate_rank_supports_a_single_feature(mode):
+    features = torch.arange(5.0).reshape(5, 1)
+
+    assert estimate_rank(features, n=-1, mode=mode) == 1
 
 
 @pytest.mark.parametrize("mode", ["a", "aaT"])
