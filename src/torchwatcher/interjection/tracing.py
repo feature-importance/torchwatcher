@@ -1,6 +1,7 @@
 import copy
 import importlib
 import inspect
+import warnings
 from collections import OrderedDict
 from contextvars import ContextVar
 from types import MethodType
@@ -39,21 +40,53 @@ _native_apply_modules: ContextVar[Optional[set[int]]] = ContextVar(
 _TORCHWATCHER_STATE_PREFIX = "_torchwatcher."
 
 
+def _registered_state(module: nn.Module, *, keep_vars: bool = True):
+    """Return standard persistent state without invoking state-dict hooks."""
+    state = OrderedDict()
+    metadata = OrderedDict()
+
+    def visit(current: nn.Module, prefix: str, ancestors: set[int]):
+        metadata[prefix[:-1]] = {"version": current._version}
+        current._save_to_state_dict(state, prefix, keep_vars)
+
+        for name, child in current._modules.items():
+            if child is None or id(child) in ancestors:
+                continue
+            visit(
+                child,
+                prefix + name + ".",
+                ancestors | {id(child)},
+            )
+
+    visit(module, "", {id(module)})
+    state._metadata = metadata
+    return state
+
+
 def _state_objects(module: nn.Module) -> dict[str, torch.Tensor]:
     """Return persistent parameter and buffer registrations by state name."""
-    state_names = set(module.state_dict())
-    objects = {
-        name: parameter
-        for name, parameter in module.named_parameters(
-            remove_duplicate=False,
-        )
-        if name in state_names
-    }
-    objects.update({
-        name: buffer
-        for name, buffer in module.named_buffers(remove_duplicate=False)
-        if name in state_names
-    })
+    objects = {}
+
+    def visit(current: nn.Module, prefix: str, ancestors: set[int]):
+        for name, parameter in current._parameters.items():
+            if parameter is not None:
+                objects[prefix + name] = parameter
+        for name, buffer in current._buffers.items():
+            if (
+                    buffer is not None
+                    and name not in current._non_persistent_buffers_set
+            ):
+                objects[prefix + name] = buffer
+        for name, child in current._modules.items():
+            if child is None or id(child) in ancestors:
+                continue
+            visit(
+                child,
+                prefix + name + ".",
+                ancestors | {id(child)},
+            )
+
+    visit(module, "", {id(module)})
     return objects
 
 
@@ -341,59 +374,34 @@ def _begin_dual_graph_load_transaction(module, context):
     context["cleanup"] = cleanup
 
 
-def _dual_graph_state_dict_hook(
+def _merge_dual_graph_state(
         module,
         state_dict,
         prefix,
-        _local_metadata,
+        keep_vars,
 ):
-    """Collapse mode-graph state into one logical checkpoint namespace."""
+    """Merge graph-owned state into an already saved logical checkpoint."""
+    graph_written = set()
+    graph_states = {}
     for graph_name in ("train_module", "eval_module"):
-        graph_prefix = f"{prefix}{graph_name}."
-        for key in tuple(state_dict):
-            if not key.startswith(graph_prefix):
+        graph_state = _registered_state(
+            getattr(module, graph_name),
+            keep_vars=keep_vars,
+        )
+        graph_states[graph_name] = graph_state
+        for state_name, value in graph_state.items():
+            if (graph_name, state_name) in module._graph_state_to_source:
                 continue
-            state_name = key[len(graph_prefix):]
             for checkpoint_name in _dual_graph_checkpoint_names(
                     module,
                     graph_name,
                     state_name,
             ):
                 logical_key = f"{prefix}{checkpoint_name}"
-                if logical_key not in state_dict:
-                    state_dict[logical_key] = state_dict[key]
-            del state_dict[key]
-
-    source_module = module.__dict__["_torchwatcher_source_module"][0]
-    keep_vars = module.__dict__.pop(
-        "_torchwatcher_state_dict_keep_vars",
-        False,
-    )
-    source_state = (
-        source_module.state_dict(keep_vars=keep_vars)
-        if source_module is not None
-        else None
-    )
-    if source_state is not None:
-        for source_name in module._source_only_state_names:
-            state_dict[f"{prefix}{source_name}"] = source_state[source_name]
-
-        # FX emits state in graph-use order. Re-establish the source module's
-        # traversal order so the public checkpoint is indistinguishable from
-        # the original module, then retain analyser-only entries afterwards.
-        source_keys = [
-            f"{prefix}{source_name}"
-            for source_name in source_state
-            if f"{prefix}{source_name}" in state_dict
-        ]
-        source_key_set = set(source_keys)
-        auxiliary_keys = [
-            key for key in state_dict
-            if key.startswith(prefix) and key not in source_key_set
-        ]
-        for key in source_keys + auxiliary_keys:
-            value = state_dict.pop(key)
-            state_dict[key] = value
+                if logical_key in graph_written:
+                    continue
+                state_dict[logical_key] = value
+                graph_written.add(logical_key)
 
     metadata = getattr(state_dict, "_metadata", None)
     if metadata is None:
@@ -401,32 +409,91 @@ def _dual_graph_state_dict_hook(
 
     logical_root = prefix[:-1]
     for graph_name in ("train_module", "eval_module"):
-        graph_root = f"{prefix}{graph_name}"
-        for key in tuple(metadata):
-            if key == graph_root:
-                del metadata[key]
+        graph_metadata = getattr(
+            graph_states[graph_name],
+            "_metadata",
+            {},
+        )
+        for module_name, local_metadata in graph_metadata.items():
+            if (graph_name, module_name) in module._graph_module_to_source:
                 continue
-            if not key.startswith(f"{graph_root}."):
-                continue
-            module_name = key[len(graph_root) + 1:]
             for checkpoint_name in _dual_graph_metadata_names(
                     module, graph_name, module_name):
                 logical_key = ".".join(filter(None, (
                     logical_root,
                     checkpoint_name,
                 )))
-                if logical_key not in metadata:
-                    metadata[logical_key] = metadata[key]
-            del metadata[key]
+                metadata.setdefault(logical_key, local_metadata)
 
-    if source_state is not None:
-        source_metadata = getattr(source_state, "_metadata", {})
-        for source_name, source_local_metadata in source_metadata.items():
-            logical_key = ".".join(filter(None, (
-                logical_root,
-                source_name,
-            )))
-            metadata[logical_key] = source_local_metadata
+
+def _graph_owned_module_occurrences(module):
+    """Return graph-only modules once in their public checkpoint namespace."""
+    occurrences = []
+    seen_names = set()
+    for graph_name in ("train_module", "eval_module"):
+        graph_module = getattr(module, graph_name)
+        for module_name, child in graph_module.named_modules(
+                remove_duplicate=False):
+            if (
+                    not module_name
+                    or (graph_name, module_name)
+                    in module._graph_module_to_source
+            ):
+                continue
+            for checkpoint_name in _dual_graph_metadata_names(
+                    module, graph_name, module_name):
+                if checkpoint_name in seen_names:
+                    continue
+                seen_names.add(checkpoint_name)
+                occurrences.append((checkpoint_name, child))
+    return occurrences
+
+
+def _run_graph_state_dict_pre_hooks(
+        module,
+        destination,
+        prefix,
+        keep_vars,
+):
+    occurrences = _graph_owned_module_occurrences(module)
+    metadata = getattr(destination, "_metadata", None)
+    for checkpoint_name, child in occurrences:
+        module_prefix = f"{prefix}{checkpoint_name}."
+        if metadata is not None:
+            metadata.setdefault(
+                module_prefix[:-1],
+                {"version": child._version},
+            )
+        for hook in child._state_dict_pre_hooks.values():
+            hook(child, module_prefix, keep_vars)
+    return occurrences
+
+
+def _run_graph_state_dict_post_hooks(
+        occurrences,
+        destination,
+        prefix,
+):
+    metadata = getattr(destination, "_metadata", {})
+    for checkpoint_name, child in reversed(occurrences):
+        module_prefix = f"{prefix}{checkpoint_name}."
+        local_metadata = metadata.get(
+            module_prefix[:-1],
+            {"version": child._version},
+        )
+        for hook in child._state_dict_hooks.values():
+            hook_result = hook(
+                child,
+                destination,
+                module_prefix,
+                local_metadata,
+            )
+            if not getattr(hook, "_from_public_api", False):
+                if hook_result is not None:
+                    destination = hook_result
+            elif hook_result is not None:
+                raise RuntimeError("state_dict post-hook must return None")
+    return destination
 
 
 def _dual_graph_load_state_dict_pre_hook(
@@ -484,7 +551,8 @@ def _dual_graph_load_state_dict_pre_hook(
     for graph_name in ("train_module", "eval_module"):
         graph_module = getattr(module, graph_name)
         graph_state_objects = _state_objects(graph_module)
-        for key, value in graph_module.state_dict().items():
+        for key, value in _registered_state(
+                graph_module, keep_vars=False).items():
             checkpoint_names = _dual_graph_checkpoint_names(
                 module,
                 graph_name,
@@ -549,7 +617,7 @@ def _dual_graph_load_state_dict_pre_hook(
 
     source_module = module.__dict__["_torchwatcher_source_module"][0]
     if source_module is not None:
-        source_state = source_module.state_dict(keep_vars=True)
+        source_state = _registered_state(source_module, keep_vars=True)
         source_state_objects = _state_objects(source_module)
         for source_name in module._source_state_names:
             source_key = f"{prefix}{source_name}"
@@ -582,6 +650,24 @@ def _dual_graph_load_state_dict_pre_hook(
                 source_state[source_name] = supplied_value
             translated_keys.add(source_key)
 
+        # State-dict post-hooks may add public keys which are consumed by a
+        # corresponding load pre-hook. They are deliberately absent from the
+        # hook-free construction schema, so offer otherwise unknown logical
+        # keys to the source load and retain only genuinely unexpected ones.
+        hook_candidates = {}
+        for full_key in state_dict:
+            if not full_key.startswith(prefix):
+                continue
+            supplied_key = full_key[len(prefix):]
+            if (
+                    full_key in translated_keys
+                    or supplied_key.startswith(_TORCHWATCHER_STATE_PREFIX)
+                    or supplied_key in source_state
+            ):
+                continue
+            source_state[supplied_key] = state_dict[full_key]
+            hook_candidates[supplied_key] = full_key
+
         source_metadata = getattr(source_state, "_metadata", None)
         if source_metadata is not None and metadata is not None:
             logical_root = prefix[:-1]
@@ -594,13 +680,20 @@ def _dual_graph_load_state_dict_pre_hook(
                     source_metadata[source_name] = metadata[logical_name]
         assign = bool(_local_metadata.get("assign_to_params_buffers", False))
         try:
-            source_module.load_state_dict(
+            source_incompatible = source_module.load_state_dict(
                 source_state,
-                strict=True,
+                strict=False,
                 assign=assign,
             )
         except RuntimeError as error:
             error_messages.append(str(error))
+        else:
+            unexpected = set(source_incompatible.unexpected_keys)
+            translated_keys.update(
+                full_key
+                for source_name, full_key in hook_candidates.items()
+                if source_name not in unexpected
+            )
 
     context = {"prefix": prefix, "cleanup": None}
     module.__dict__.setdefault(
@@ -625,7 +718,7 @@ def _dual_graph_load_state_dict_post_hook(module, incompatible_keys):
     translations = {}
     for graph_name in ("train_module", "eval_module"):
         graph_module = getattr(module, graph_name)
-        for state_name in graph_module.state_dict():
+        for state_name in _registered_state(graph_module):
             internal_name = f"{graph_name}.{state_name}"
             checkpoint_names = _dual_graph_checkpoint_names(
                 module,
@@ -671,6 +764,8 @@ def _build_dual_graph_state_mapping(
         return (), (), {}, {}
 
     source_objects = _state_objects(source_module)
+    source_state_names = tuple(_registered_state(source_module))
+    source_state_name_set = set(source_state_names)
     source_names_by_id: dict[int, list[str]] = {}
     for name, value in source_objects.items():
         source_names_by_id.setdefault(id(value), []).append(name)
@@ -699,6 +794,7 @@ def _build_dual_graph_state_mapping(
 
     graph_to_source = {}
     graph_module_to_source = {}
+    graph_state_names_by_graph = {}
     for graph_name, graph_module in (
             ("train_module", train_module),
             ("eval_module", eval_module),
@@ -722,8 +818,8 @@ def _build_dual_graph_state_mapping(
                     source_names
                 )
 
-        graph_state_names = set(graph_module.state_dict())
-        source_state_names = set(source_module.state_dict())
+        graph_state_names = set(_registered_state(graph_module))
+        graph_state_names_by_graph[graph_name] = graph_state_names
         for (mapped_graph_name, module_name), source_names in tuple(
                 graph_module_to_source.items()):
             if mapped_graph_name != graph_name:
@@ -740,12 +836,11 @@ def _build_dual_graph_state_mapping(
             )
             checkpoint_names = tuple(
                 name for name in checkpoint_names
-                if name in source_state_names
+                if name in source_state_name_set
             )
             if checkpoint_names:
                 graph_to_source[(graph_name, state_name)] = checkpoint_names
 
-    source_state_names = tuple(source_module.state_dict())
     mapped_source_names = {
         source_name
         for source_names in graph_to_source.values()
@@ -756,11 +851,8 @@ def _build_dual_graph_state_mapping(
     # authoritative and the obsolete source value is not source-only state.
     mapped_source_names.update(
         state_name
-        for graph_name, graph_module in (
-            ("train_module", train_module),
-            ("eval_module", eval_module),
-        )
-        for state_name in graph_module.state_dict()
+        for graph_name in ("train_module", "eval_module")
+        for state_name in graph_state_names_by_graph[graph_name]
         if (
                 (graph_name, state_name) not in graph_to_source
                 and state_name in source_state_names
@@ -801,7 +893,6 @@ class DualGraphModule(nn.Module):
         )
         self.__dict__["_torchwatcher_source_module"] = (source_module,)
         self._auxiliary_module_names = frozenset(auxiliary_module_names)
-        self.register_state_dict_post_hook(_dual_graph_state_dict_hook)
         self.register_load_state_dict_pre_hook(
             _dual_graph_load_state_dict_pre_hook
         )
@@ -809,9 +900,80 @@ class DualGraphModule(nn.Module):
             _dual_graph_load_state_dict_post_hook
         )
 
-    def _save_to_state_dict(self, destination, prefix, keep_vars):
-        self.__dict__["_torchwatcher_state_dict_keep_vars"] = keep_vars
-        super()._save_to_state_dict(destination, prefix, keep_vars)
+    def state_dict(
+            self,
+            *args,
+            destination=None,
+            prefix="",
+            keep_vars=False,
+    ):
+        """Return one logical checkpoint for both implementation graphs."""
+        if args:
+            warnings.warn(
+                "Positional args are being deprecated, use kwargs instead. "
+                "Refer to https://pytorch.org/docs/main/generated/torch.nn."
+                "Module.html#torch.nn.Module.state_dict for details.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            if destination is None:
+                destination = args[0]
+            if len(args) > 1 and prefix == "":
+                prefix = args[1]
+            if len(args) > 2 and keep_vars is False:
+                keep_vars = args[2]
+
+        if destination is None:
+            destination = OrderedDict()
+            destination._metadata = OrderedDict()
+
+        local_metadata = {"version": self._version}
+        if hasattr(destination, "_metadata"):
+            destination._metadata[prefix[:-1]] = local_metadata
+
+        for hook in self._state_dict_pre_hooks.values():
+            hook(self, prefix, keep_vars)
+
+        self._save_to_state_dict(destination, prefix, keep_vars)
+        source_module = self.__dict__["_torchwatcher_source_module"][0]
+        if source_module is not None:
+            source_module.state_dict(
+                destination=destination,
+                prefix=prefix,
+                keep_vars=keep_vars,
+            )
+        graph_owned_modules = _run_graph_state_dict_pre_hooks(
+            self,
+            destination,
+            prefix,
+            keep_vars,
+        )
+        _merge_dual_graph_state(
+            self,
+            destination,
+            prefix,
+            keep_vars,
+        )
+        destination = _run_graph_state_dict_post_hooks(
+            graph_owned_modules,
+            destination,
+            prefix,
+        )
+
+        for hook in self._state_dict_hooks.values():
+            hook_result = hook(
+                self,
+                destination,
+                prefix,
+                local_metadata,
+            )
+            if not getattr(hook, "_from_public_api", False):
+                if hook_result is not None:
+                    destination = hook_result
+            elif hook_result is not None:
+                raise RuntimeError("state_dict post-hook must return None")
+
+        return destination
 
     @property
     def graphmodule(self):

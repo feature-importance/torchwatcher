@@ -73,6 +73,11 @@ def estimate_rank(features: torch.Tensor,
         else:
             f = features
 
+        if f.shape[0] <= 1:
+            # A mean-centred matrix with at most one observation is zero-rank.
+            # torch.cov's default unbiased estimate is undefined here.
+            return 0
+
         # torch.cov returns a scalar for a single feature, whereas
         # matrix_rank consistently expects a matrix.
         cov = torch.atleast_2d(torch.cov(f.T))
@@ -188,7 +193,7 @@ class RankAnalyser(Analyser):
     ) -> dict:
         try:
             if self.mode == 'aTa':
-                covar = result.covariance()
+                covar = result.covariance(unbiased=result.count > 1)
                 rank = matrix_rank(
                     covar,
                     hermitian=True,
@@ -307,7 +312,7 @@ class CovarianceSpectrumStatisticsAnalyser(RankAnalyser):
         self.taps = taps
 
     def finalise_result(self, name, result) -> dict:
-        covariance = result.covariance()
+        covariance = result.covariance(unbiased=result.count > 1)
         stats = compute_cov_spectrum_stats(covariance,
                                            threshold=self.threshold,
                                            taps=self.taps)

@@ -182,6 +182,47 @@ def test_estimate_rank_supports_a_single_feature(mode):
     assert estimate_rank(features, n=-1, mode=mode) == 1
 
 
+@pytest.mark.parametrize("mode", ["aTa", "aaT", "a"])
+def test_estimate_rank_supports_a_single_observation(mode):
+    features = torch.tensor([[1.0, 2.0, 3.0]])
+
+    assert estimate_rank(features, n=-1, mode=mode) == 0
+
+
+@pytest.mark.parametrize("mode", ["aTa", "aaT", "a"])
+def test_rank_analyser_supports_a_single_observation(mode):
+    analyser = RankAnalyser(mode=mode, n=-1)
+    watched_model = interject_by_name(
+        nn.Sequential(nn.Identity()),
+        "0",
+        analyser,
+    )
+
+    watched_model(torch.tensor([[1.0, 2.0, 3.0]]))
+
+    assert analyser.to_dict()["0"] == {
+        "features_rank": 0,
+        "features_dim": 3,
+        "normalised_features_rank": 0.0,
+    }
+
+
+def test_covariance_spectrum_supports_a_single_observation():
+    analyser = CovarianceSpectrumStatisticsAnalyser(n=-1)
+    watched_model = interject_by_name(
+        nn.Sequential(nn.Identity()),
+        "0",
+        analyser,
+    )
+
+    watched_model(torch.tensor([[1.0, 2.0, 3.0]]))
+
+    result = analyser.to_dict()["0"]
+    assert result["features_rank"] == 0
+    assert result["normalised_features_rank"] == 0.0
+    assert all(torch.isfinite(torch.tensor(value)) for value in result.values())
+
+
 @pytest.mark.parametrize("mode", ["a", "aaT"])
 def test_rank_analyser_retains_features_before_downstream_inplace_update(mode):
     features = torch.tensor([

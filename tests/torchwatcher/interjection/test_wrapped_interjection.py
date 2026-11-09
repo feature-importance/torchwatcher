@@ -1301,6 +1301,94 @@ def test_dual_graph_load_hooks_run_once_in_the_original_namespace():
     assert post_hook_calls == [source[0]]
 
 
+def test_tracing_does_not_run_state_dict_hooks():
+    source = nn.Sequential(nn.Linear(2, 1))
+    calls = []
+    source[0].register_state_dict_pre_hook(
+        lambda _module, prefix, _keep_vars: calls.append(("pre", prefix))
+    )
+    source[0].register_state_dict_post_hook(
+        lambda _module, _state, prefix, _metadata: (
+            calls.append(("post", prefix))
+        )
+    )
+
+    trace(source)
+
+    assert calls == []
+
+
+def test_dual_graph_state_dict_hooks_run_once_in_original_namespace():
+    source = nn.Sequential(nn.Linear(2, 1))
+    calls = []
+
+    def post_hook(_module, state, prefix, _metadata):
+        calls.append(("post", prefix))
+        state[f"{prefix}weight"] = state[f"{prefix}weight"] + 1
+
+    source[0].register_state_dict_pre_hook(
+        lambda _module, prefix, _keep_vars: calls.append(("pre", prefix))
+    )
+    source[0].register_state_dict_post_hook(post_hook)
+    container = nn.Module()
+    container.watched = trace(source)
+
+    checkpoint = container.state_dict()
+
+    assert calls == [
+        ("pre", "watched.0."),
+        ("post", "watched.0."),
+    ]
+    torch.testing.assert_close(
+        checkpoint["watched.0.weight"],
+        source[0].weight.detach() + 1,
+    )
+
+
+def test_state_dict_hook_added_keys_round_trip_through_load_hook():
+    source = nn.Sequential(nn.Linear(2, 1))
+    loaded = []
+
+    def save_hook(_module, state, prefix, _metadata):
+        state[f"{prefix}custom"] = torch.tensor(7)
+
+    def load_hook(_module, state, prefix, *_args):
+        loaded.append(state.pop(f"{prefix}custom").item())
+
+    source[0].register_state_dict_post_hook(save_hook)
+    source[0].register_load_state_dict_pre_hook(load_hook)
+    watched_model = trace(source)
+    checkpoint = watched_model.state_dict()
+
+    watched_model.load_state_dict(checkpoint, strict=True)
+
+    assert loaded == [7]
+
+
+def test_auxiliary_state_dict_hooks_run_once_in_public_namespace():
+    interjection = _StatefulInterjection()
+    calls = []
+    interjection.register_state_dict_pre_hook(
+        lambda _module, prefix, _keep_vars: calls.append(("pre", prefix))
+    )
+    interjection.register_state_dict_post_hook(
+        lambda _module, _state, prefix, _metadata: (
+            calls.append(("post", prefix))
+        )
+    )
+    watched_model = interject_by_module_class(
+        nn.Sequential(nn.Linear(2, 1)),
+        nn.Linear,
+        interjection,
+    )
+
+    checkpoint = watched_model.state_dict()
+
+    prefix = "_torchwatcher._StatefulInterjection0."
+    assert calls == [("pre", prefix), ("post", prefix)]
+    assert f"{prefix}marker" in checkpoint
+
+
 def test_failed_dual_graph_load_restores_temporary_adapters():
     source = nn.Sequential(_FailingVersionedLinear(2, 1))
     watched_model = trace(source)

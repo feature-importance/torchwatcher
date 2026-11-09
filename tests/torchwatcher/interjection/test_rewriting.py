@@ -63,6 +63,37 @@ def test_parameterised_replacement_is_shared_between_train_and_eval():
     )
 
 
+def test_parameterised_replacement_state_dict_hooks_run_once():
+    calls = []
+
+    def create_replacement(original):
+        replacement = nn.Linear(
+            original.in_features,
+            original.out_features,
+        )
+        replacement.register_state_dict_pre_hook(
+            lambda _module, prefix, _keep_vars: (
+                calls.append(("pre", prefix))
+            )
+        )
+        replacement.register_state_dict_post_hook(
+            lambda _module, _state, prefix, _metadata: (
+                calls.append(("post", prefix))
+            )
+        )
+        return replacement
+
+    replaced = replace(
+        nn.Sequential(nn.Linear(1, 1)),
+        matches_module_class(nn.Linear),
+        create_replacement,
+    )
+
+    replaced.state_dict()
+
+    assert calls == [("pre", "0."), ("post", "0.")]
+
+
 def test_replace_restores_source_mode_after_failure():
     model = _RaisesInEval()
     model.train()
